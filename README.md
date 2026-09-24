@@ -52,6 +52,8 @@ agent 是**收敛式**而非触发器：每 2 秒把实际状态拉回期望状�
 
 前置：Docker 与 Docker Compose、Node.js ≥ 20（仅 agent 需要，站点跑在容器里自带）、
 一个 [TMDB](https://www.themoviedb.org/settings/api) 凭据。
+构建站点镜像时会执行 `npm ci`，需能访问 npm registry（国内通常要给 Docker daemon 配代理，
+写进 `/etc/systemd/system/docker.service.d/*.conf` 后 `systemctl daemon-reload && systemctl restart docker`）。
 
 ```bash
 git clone https://github.com/wxwxOk/mediasite /opt/mediasite
