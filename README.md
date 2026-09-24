@@ -45,7 +45,7 @@ agent 是**收敛式**而非触发器：每 2 秒把实际状态拉回期望状�
 一个 [TMDB](https://www.themoviedb.org/settings/api) 凭据。
 
 ```bash
-git clone <your-repo-url> /opt/mediasite
+git clone https://github.com/wxwxOk/mediasite /opt/mediasite
 cd /opt/mediasite
 ```
 
