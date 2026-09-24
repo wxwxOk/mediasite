@@ -1,0 +1,32 @@
+dht_crawler:
+  bootstrap_nodes:
+    - "router.bittorrent.com:6881"
+    - "router.utorrent.com:6881"
+    - "dht.transmissionbt.com:6881"
+    - "dht.libtorrent.org:25401"
+    - "dht.aelitis.com:6881"
+  # 由 crawler-agent 按控制台档位改写（low/mid/high → 5/10/40），手改会被下一轮覆盖。
+  # 10 是 bitmagnet 官方默认值，其文档明写继续调高收益递减。
+  scaling_factor: 10
+  reseed_bootstrap_nodes_interval: 5m
+  save_files_threshold: 300
+dht_server:
+  port: 3334
+  query_timeout: 15s
+metainfo_requester:
+  request_timeout: 15s
+processor:
+  concurrency: 8
+http_server:
+  options:
+    - cors
+    - pprof
+    - graphql
+    - import
+    - prometheus
+    - torznab
+    - webui
+# 富化开关由 compose 里各服务的 TMDB_ENABLED 环境变量决定：只让 queue_server 那个容器开，
+# 爬虫容器刻意关掉，避免两个进程抢同一批富化任务。这里的值只是兜底。
+tmdb:
+  enabled: false

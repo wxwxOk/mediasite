@@ -1,0 +1,15 @@
+node_modules/
+.env
+*.log
+
+# Python 工具脚本的字节码缓存
+__pycache__/
+*.pyc
+
+# 运行期数据：站点 SQLite、封面缓存，以及 web 与 agent 通过它交换的控制状态文件
+data/
+
+# agent 自动留的 config.yml 备份、控制文件的临时落盘
+*.bak-agent
+*.tmp
+import-log.json

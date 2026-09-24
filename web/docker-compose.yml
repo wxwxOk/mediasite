@@ -1,0 +1,30 @@
+services:
+  mediasite:
+    build: .
+    container_name: mediasite
+    restart: unless-stopped
+    # 默认只发布到宿主回环；设好 SITE_PASSWORD 后把 .env 里 BIND_ADDR 改为 0.0.0.0 再对外
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:8899:8899"
+    volumes:
+      # 仓库根的 data/ 是站点与 crawler-agent 的共享目录（控制状态也在这里交换）
+      - ../data:/app/data
+    env_file:
+      - .env
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - PORT=8899
+      - TMDB_RPS=${TMDB_RPS:-8}
+      - IMGCACHE_MAX_MB=${IMGCACHE_MAX_MB:-2048}
+      - FULL_SYNC=${FULL_SYNC:-0}   # 置 1 则下次启动强制全量重拉各榜单
+      - SYNC_INTERVAL_H=${SYNC_INTERVAL_H:-24}
+      # 指向宿主上的 Prowlarr / bitmagnet（两者都在宿主机网络里监听）
+      - PROWLARR_URL=${PROWLARR_URL:-http://host.docker.internal:9696}
+      - BITMAGNET_URL=${BITMAGNET_URL:-http://host.docker.internal:3333}
+      # 需要走代理才能访问 TMDB / 豆瓣时，把 HTTP_PROXY、HTTPS_PROXY 写进 .env；
+      # node 内置 fetch 不认这两个变量，NODE_USE_ENV_PROXY=1 才会启用。
+      # NO_PROXY 必须含 host.docker.internal，否则访问 Prowlarr / bitmagnet 会被丢进代理。
+      - NODE_USE_ENV_PROXY=1
+      - NO_PROXY=localhost,127.0.0.1,host.docker.internal,.douban.com
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

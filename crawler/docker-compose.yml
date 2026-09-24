@@ -1,0 +1,66 @@
+services:
+  bitmagnet-core:
+    image: ghcr.io/bitmagnet-io/bitmagnet:latest
+    container_name: bitmagnet-core
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      # 必须用 DSN 才能带 pool_max_conns：默认值是 max(4, NumCPU)=4，队列处理器
+      # 嵌套开事务会把这 4 个连接全占死，池满后搜索与 TMDB 富化一起永久卡住。
+      # 指定 dsn 后其余 postgres.* 选项一律被忽略，故不再单列 host/password。
+      - "POSTGRES_DSN=postgres://postgres:${POSTGRES_PASSWORD:-postgres}@127.0.0.1:5432/bitmagnet?pool_max_conns=25&pool_min_conns=2"
+      # 分类器（queue_server）在此容器，TMDB 富化的生效点只在这一个服务上
+      - TMDB_ENABLED=true
+      - TMDB_API_KEY=${TMDB_API_KEY:-}
+      # 若 api.themoviedb.org 等目标被 DNS 污染、直连超时，取消下面三行注释并填自己的代理。
+      # network_mode: host 下容器内的 127.0.0.1 就是宿主机，端口按实际代理改。
+      # - HTTPS_PROXY=http://127.0.0.1:7890
+      # - HTTP_PROXY=http://127.0.0.1:7890
+      # - NO_PROXY=localhost,127.0.0.1
+    volumes:
+      - ./config:/root/.config/bitmagnet
+    command:
+      - worker
+      - run
+      - --keys=http_server
+      - --keys=queue_server
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # DHT 爬虫本体：由 crawler-agent 按控制台的模式/时段启停，不直接 compose up
+  bitmagnet-crawler:
+    image: ghcr.io/bitmagnet-io/bitmagnet:latest
+    container_name: bitmagnet-crawler
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - POSTGRES_HOST=127.0.0.1
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - TMDB_ENABLED=false
+    volumes:
+      - ./config:/root/.config/bitmagnet
+    command:
+      - worker
+      - run
+      - --keys=dht_crawler
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: bitmagnet-postgres
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    restart: unless-stopped
+    environment:
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=bitmagnet
+      - PGUSER=postgres
+    shm_size: 1g
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready
+      start_period: 20s
+      interval: 10s

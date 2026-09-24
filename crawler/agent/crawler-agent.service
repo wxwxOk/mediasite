@@ -1,0 +1,23 @@
+[Unit]
+Description=bitmagnet DHT crawler control agent (mediasite)
+# 收敛式设计：docker 起晚了也会在下一轮（2s）自动纠正，故不依赖 docker.service，
+# 用户级服务本来也管不到系统单元。
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 部署路径不是 /opt/mediasite 时改这两行
+Environment=MEDIASITE_DATA_DIR=/opt/mediasite/data
+Environment=BITMAGNET_CONFIG=/opt/mediasite/crawler/config/config.yml
+# 可选：显式指定采样网卡（默认取默认路由那块）；SCHEDULE_TZ 默认 Asia/Shanghai
+# Environment=NET_IFACE=eth0
+# Environment=SCHEDULE_TZ=Asia/Shanghai
+# 用 nvm 管 node 时，用户服务的 PATH 不含 nvm 目录，必须显式补上，否则找不到 node：
+# Environment=PATH=/home/you/.nvm/versions/node/v24.15.0/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node /opt/mediasite/crawler/agent/crawler-agent.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

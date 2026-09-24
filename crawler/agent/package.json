@@ -1,0 +1,13 @@
+{
+  "name": "mediasite-crawler-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "把 mediasite 控制台的期望状态收敛到 bitmagnet 爬虫实际状态的宿主机 agent",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node crawler-agent.js"
+  }
+}
