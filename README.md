@@ -64,21 +64,26 @@ cd /opt/mediasite
 cd crawler
 cp .env.example .env      # 填入 TMDB_API_KEY
 docker compose up -d bitmagnet-core postgres
+docker compose create bitmagnet-crawler   # 只创建、不启动
 ```
 
-`bitmagnet-crawler` 刻意**不**在这里启动——它由 agent 按控制台设定启停。
+`bitmagnet-crawler` 刻意**不**在这里启动——它由 agent 按控制台设定启停；
+但容器必须先被创建出来，因为 agent 用的是 `docker start/stop` 而非 `up`。
 爬虫监听 3333（GraphQL/Web UI），PostgreSQL 只绑 `127.0.0.1:5432`。
 
 ### 2. 站点
 
 ```bash
 cd ../web
+mkdir -p ../data          # 必须先建：Docker 自动创建会属 root:root，容器内以 node 写不进去
 cp .env.example .env
 # 必填 TMDB_TOKEN；对外暴露时还要设 SITE_PASSWORD
+# 需要代理才能访问 TMDB 时，把 .env 里 HTTP_PROXY / HTTPS_PROXY 两行取消注释
 docker compose up -d --build
 ```
 
-首次启动会拉 TMDB 榜单，页面在 <http://localhost:8899>。
+首次启动会拉 TMDB 榜单（数千条，需几分钟），页面在 <http://localhost:8899>。
+若日志只反复出现 `sync failed, retrying in 5min`，即是没配代理。
 
 ### 3. 爬虫控制 agent
 
@@ -125,7 +130,7 @@ loginctl enable-linger $USER     # 未登录时也持续运行
 | `SITE_PASSWORD` | web | 访问口令；**留空即不鉴权**，此时务必保持 `BIND_ADDR=127.0.0.1` |
 | `SITE_SECRET` | web | 会话签名密钥，`openssl rand -hex 32` 生成 |
 | `BIND_ADDR` | web | `0.0.0.0` 才对外，前提是已设 `SITE_PASSWORD` |
-| `HTTP_PROXY` / `HTTPS_PROXY` | web | 访问 TMDB / 豆瓣需要代理时填 |
+| `HTTP_PROXY` / `HTTPS_PROXY` | web | 访问 TMDB / 豆瓣走代理；国内网络不填则同步一直失败（日志刷 `sync failed`）|
 | `TMDB_API_KEY` | crawler | bitmagnet 富化用 |
 | `MEDIASITE_DATA_DIR` | agent | 站点 `data/` 的绝对路径 |
 | `NET_IFACE` | agent | 网速采样的网卡，默认自动取默认路由那块 |
