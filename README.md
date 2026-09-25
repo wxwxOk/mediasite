@@ -149,3 +149,7 @@ loginctl enable-linger $USER     # 未登录时也持续运行
 
 [MIT](LICENSE)。bitmagnet 由 [bitmagnet-io](https://github.com/bitmagnet-io/bitmagnet) 以 MIT 许可发布，
 本项目通过官方镜像调用它。
+
+## 社区
+
+本开源项目已链接并认可 [LINUX DO 社区](https://linux.do)。
