@@ -4,7 +4,7 @@
 // 好处是宿主重启 / 容器崩溃 / 有人手动 docker compose up -d 都能在 2s 内自动纠正。
 // 控制通路走文件，mediasite 容器因此不需要任何 Docker 权限，也不新增监听端口。
 //
-// 需要能免密执行 docker start/stop/restart/inspect：agent 以某个用户身份跑，
+// 需要能免密执行 docker start/stop/restart/inspect/exec：agent 以某个用户身份跑，
 // 就把该用户加进 docker 组（或为其配置 sudoers 免密），不要在本脚本里塞密码。
 import { execFile } from 'node:child_process';
 import { readFile, writeFile, rename } from 'node:fs/promises';
@@ -16,7 +16,9 @@ const DESIRED = join(MEDIA, 'crawler.json');      // mediasite 写，本服务�
 const STATE = join(MEDIA, 'crawler-state.json');  // 本服务写，mediasite 只读
 const CONFIG = process.env.BITMAGNET_CONFIG ?? '/opt/mediasite/crawler/config/config.yml';
 const CONTAINER = process.env.CRAWLER_CONTAINER ?? 'bitmagnet-crawler';
+const PG = process.env.PG_CONTAINER ?? 'bitmagnet-postgres';
 const INTERVAL = 2000;
+const STATS_INTERVAL = 60_000;  // 种子统计刷新间隔：count(*) 约 0.3s，没必要跟 2s 的控制回路同频
 
 // 网速采样用的网卡：显式指定优先，否则取默认路由那块。
 // 探测不到就整个关闭采样（容器里跑、或 /proc 不可用时），不影响启停控制。
@@ -113,6 +115,28 @@ async function sampleNet() {
   };
 }
 
+// 种子统计：总量 count(*) ≈0.3s，昨日新增走 created_at 索引 ≈10ms。
+// 「昨日」的边界在 SQL 里按调度时区求（DST 切换日也不会差一小时）；上游失败时保留上次数值
+let torrents = null;
+let lastStatsError = null;
+
+async function refreshTorrents() {
+  try {
+    const day = `date_trunc('day', now() AT TIME ZONE '${TZ}')`;
+    const sql = 'SELECT (SELECT count(*) FROM torrents),'
+      + ` (SELECT count(*) FROM torrents`
+      + ` WHERE created_at >= (${day} - interval '1 day') AT TIME ZONE '${TZ}'`
+      + ` AND created_at < ${day} AT TIME ZONE '${TZ}')`;
+    const [total, yesterday] = (await docker('exec', PG, 'psql', '-U', 'postgres', '-d', 'bitmagnet', '-t', '-A', '-F', ',', '-c', sql))
+      .split(',').map(Number);
+    torrents = { total, yesterday };
+    lastStatsError = null;
+  } catch (e) {
+    if (e.message !== lastStatsError) console.warn(`[crawler-agent] 种子统计失败: ${e.message}`);
+    lastStatsError = e.message;
+  }
+}
+
 let lastError = null;
 let lastRunning = null;
 
@@ -179,7 +203,7 @@ async function tick() {
   const net = await sampleNet().catch(() => null);
   await writeJson(STATE, {
     mode, preset, scalingFactor: sfNow, running, inWindow: inWin,
-    nextChange, bjTime: hm, tz: TZ, net, agentAt: new Date().toISOString(), error,
+    nextChange, bjTime: hm, tz: TZ, net, torrents, agentAt: new Date().toISOString(), error,
   });
 
   if (error && error !== lastError) console.error('[crawler-agent] 错误:', error);
@@ -198,5 +222,7 @@ async function loop() {
 }
 
 log(`启动，每 ${INTERVAL / 1000}s 一轮（时间表按 ${TZ} 判定；网速采样 ${IFACE ?? '已关闭'}）`);
+void refreshTorrents();  // 首轮取数不阻塞控制回路
+setInterval(refreshTorrents, STATS_INTERVAL);
 await loop();
 setInterval(loop, INTERVAL);

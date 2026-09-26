@@ -16,7 +16,7 @@ const MIN_YEAR = 1996; // 只收录近 30 年
 const LISTS = [
   {
     // 票数门槛放宽到 150 后总量 686 页，超 TMDB discover 单查询 500 页硬上限，按年份拆两段
-    key: 'movie-popular', type: 'movie', path: '/discover/movie', total: 334, hot: 10, rotate: 20, dynamic: true,
+    key: 'movie-popular', type: 'movie', path: '/discover/movie', total: 334, hot: 20, rotate: 20, dynamic: true,
     params: { sort_by: 'popularity.desc', 'vote_count.gte': 150, 'primary_release_date.gte': '2015-01-01' },
   },
   {
@@ -25,7 +25,7 @@ const LISTS = [
     params: { sort_by: 'popularity.desc', 'vote_count.gte': 150, 'primary_release_date.gte': `${MIN_YEAR}-01-01`, 'primary_release_date.lte': '2014-12-31' },
   },
   {
-    key: 'tv-popular', type: 'tv', path: '/discover/tv', total: 241, hot: 10, rotate: 20, dynamic: true,
+    key: 'tv-popular', type: 'tv', path: '/discover/tv', total: 241, hot: 20, rotate: 20, dynamic: true,
     params: { sort_by: 'popularity.desc', 'vote_count.gte': 75, 'first_air_date.gte': `${MIN_YEAR}-01-01` },
   },
   {

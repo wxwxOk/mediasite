@@ -7,6 +7,7 @@ const SORT = {
   vote: 't.vote_average DESC, t.vote_count DESC',
   newest: 't.release_date DESC',
   oldest: 't.release_date ASC',
+  latest: 't.created_at DESC',
 };
 
 // LIKE 的 % _ \ 是元字符，用户输入需转义后再配 ESCAPE

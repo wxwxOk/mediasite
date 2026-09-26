@@ -2,7 +2,7 @@ import { layout, esc, img } from './layout.js';
 
 const DECADES = [2020, 2010, 2000, 1990];
 const VOTES = [9, 8, 7, 6];
-const SORTS = { popularity: '按热度', vote: '按评分', newest: '最新上映', oldest: '最早上映' };
+const SORTS = { popularity: '按热度', vote: '按评分', newest: '最新上映', oldest: '最早上映', latest: '最近入库' };
 
 function qs(base, patch = {}) {
   const p = new URLSearchParams();
@@ -301,6 +301,8 @@ export function crawlerPage({ desired, state, alive }) {
     `<span>爬虫 <b>${runText}</b></span>`,
     `<span>模式 <b>${esc(MODE_LABEL[desired.mode] ?? desired.mode)}</b></span>`,
     s.scalingFactor != null ? `<span>生效 scaling_factor <b>${s.scalingFactor}</b></span>` : '',
+    s.torrents ? `<span>种子总量 <b>${s.torrents.total.toLocaleString()}</b></span>` : '',
+    s.torrents ? `<span>昨日新增 <b>${s.torrents.yesterday.toLocaleString()}</b></span>` : '',
     `<span title="时区 ${esc(s.tz ?? 'Asia/Shanghai')}">当地时间 <b>${esc(s.bjTime ?? '—')}</b></span>`,
     s.nextChange ? `<span>下次切换 <b>${esc(s.nextChange)}</b></span>` : '',
     net ? `<span>网卡 ↓<b>${net.rxKBs}</b> ↑<b>${net.txKBs}</b> KB/s</span>` : '',
@@ -321,7 +323,7 @@ export function crawlerPage({ desired, state, alive }) {
       <button type="submit">保存</button>
     </form>
     <p class="alt">档位即 bitmagnet 的 <code>dht_crawler.scaling_factor</code>：并发与缓冲都乘以该值，是爬虫资源占用的总开关。官方默认 10，文档明写超过 10 收益递减。切换档位会重启爬虫容器；开关本身是秒级。</p>
-    <p class="alt">时间段按北京时间判定。网卡速率是整块网卡的总流量（含机器上所有其他服务），不是爬虫单独的。</p>`;
+    <p class="alt">时间段按北京时间判定。网卡速率是整块网卡的总流量（含机器上所有其他服务），不是爬虫单独的。种子总量与昨日新增每分钟从 bitmagnet 数据库取样一次，昨日按调度时区的自然日计。</p>`;
 
   return layout({ title: '爬虫', q: '', tabs: tabs('', {}, 'crawler'), body });
 }
