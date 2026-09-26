@@ -87,9 +87,10 @@ const formOk = (w) => {
   if (!han) return FORM.has(w);                     // 纯拉丁形态词
   if (!/[a-z]/i.test(w)) return ZH_TAIL.test(w);    // 纯中文标签
   // 混合词按开头判断："imax版" ✓ / "纽约篇第二季csi" ✗
-  return /\p{Script=Han}/u.test(w[0])
-    ? ZH_TAIL.test(w)
-    : FORM.has(/^[a-z]+/i.exec(w)[0].toLowerCase());
+  if (/\p{Script=Han}/u.test(w[0])) return ZH_TAIL.test(w);
+  // 首字符既不是汉字也不是拉丁字母（"'s" 这类），取不到词头就当形态词不成立
+  const head = /^[a-z]+/i.exec(w);
+  return head ? FORM.has(head[0].toLowerCase()) : false;
 };
 
 function afterTitle(hay, needle) {
