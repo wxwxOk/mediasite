@@ -133,7 +133,7 @@ export function detailPage(t, fav) {
       ? e.runtime ? `<span>片长 <b>${e.runtime}</b> 分钟</span>` : ''
       : e.seasons ? `<span><b>${e.seasons}</b> 季 · <b>${e.episodes ?? '?'}</b> 集</span>` : '',
     t.vote_average ? `<span>评分 <b>${t.vote_average.toFixed(1)}</b> · ${t.vote_count} 人</span>` : '',
-    // 豆瓣评分占位：页面加载后异步请求 /api/douban/:id 填充，避免列表/详情渲染直接打豆瓣
+    // 豆瓣占位：页面加载后异步请求 /api/douban/:id 填充，避免列表/详情渲染直接打豆瓣
     '<span id="douban" hidden></span>',
     t.rt_critics ? `<span><a href="${rtUrl(t)}" target="_blank" rel="noopener">烂番茄 <b>${t.rt_critics}%</b></a></span>` : '',
     t.rt_audience ? `<span><a href="${rtUrl(t)}" target="_blank" rel="noopener">爆米花 <b>${t.rt_audience}%</b></a></span>` : '',
@@ -160,10 +160,10 @@ export function detailPage(t, fav) {
         fetch('/api/douban/${t.id}')
           .then((r) => r.json())
           .then((d) => {
-            if (!d.rating) return;
+            if (!d.id) return; // 连豆瓣条目都未匹配到才隐藏
             const F = (v) => v >= 1e8 ? (v / 1e8).toFixed(1) + '亿' : v >= 1e4 ? (v / 1e4).toFixed(1) + '万' : String(v);
             const el = document.getElementById('douban');
-            el.innerHTML = '<a class="douban" href="https://movie.douban.com/subject/' + d.id + '/" target="_blank" rel="noopener">豆瓣 <b>' + d.rating.toFixed(1) + '</b>' + (d.votes ? ' · ' + F(d.votes) + ' 人' : '') + '</a>';
+            el.innerHTML = '<a class="douban" href="https://movie.douban.com/subject/' + d.id + '/" target="_blank" rel="noopener">豆瓣' + (d.rating ? ' <b>' + d.rating.toFixed(1) + '</b>' + (d.votes ? ' · ' + F(d.votes) + ' 人' : '') : '暂无评分') + '</a>';
             el.hidden = false;
           })
           .catch(() => {});

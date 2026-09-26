@@ -129,14 +129,16 @@ export async function doubanRating({ title, original_title, release_year: year, 
       const isTv = ['电视剧', '综艺', '纪录片'].includes(kind) || (kind === '动画' && /第[一二三四五六七八九十百\d]+季/.test(it.title));
       if (isTv !== (type === 'tv')) continue;
       const d = parseDetail(detail);
-      return d ? { ...d, id: it.id } : null;
+      return { rating: d?.rating ?? null, votes: d?.votes ?? null, id: it.id };
     }
     return null;
   }
 
   const page = await fetchText(`https://m.douban.com/movie/subject/${id}/`, { 'User-Agent': UA_MOBILE, Cookie: `bid=${BID}` }, doubanGate);
+  if (page == null) return null; // 详情页不存在才视为「豆瓣无此条目」
+  // 页面存在但暂无评分（如未上映）时仍返回 id，让详情页保留跳转入口
   const d = parseDetail(page);
-  return d ? { ...d, id } : null;
+  return { rating: d?.rating ?? null, votes: d?.votes ?? null, id };
 }
 
 export async function rtRating({ title, original_title, release_year: year, media_type: type }) {
