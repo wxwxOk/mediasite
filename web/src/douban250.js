@@ -71,7 +71,7 @@ const near = (a, b) => a != null && b != null && Math.abs(a - b) <= 1;
 const movies = db.prepare(`SELECT id, title, original_title, release_year, douban_id, popularity
   FROM titles WHERE media_type = 'movie'`);
 
-// 榜上有、库里没有的片：多是 1996 前的老片，TMDB 的列表查询一律从 1996 起（scraper 的 MIN_YEAR），
+// 榜上有、库里没有的片：多是早于收录下限的老片，TMDB 的列表查询一律从 config.minYear 起，
 // 正常同步永远收不到它们，只能按片名单独搜 TMDB 补录；补上后挂 title_id，卡片就能点进详情页
 const missing = db.prepare('SELECT rank, douban_id, title, alt, year FROM douban_top250 WHERE title_id IS NULL');
 // 已挂榜的条目要按周期回捞：不在任何列表里的老片 updated_at 不会自己刷新，

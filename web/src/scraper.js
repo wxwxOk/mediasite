@@ -7,8 +7,8 @@ import { rtRating } from './ratings.js';
 import { checkMagnets } from './magnets.js';
 import { syncTop250 } from './douban250.js';
 
-const MIN_YEAR = 1996; // 只收录近 30 年
-
+// 收录年份下限见 config.minYear（默认 1990）。含年份过滤的榜单都以它为起点，
+// 2015 是 movie-popular 两段的固定拆分点（单查询超 500 页硬上限），不随 minYear 变
 // total = 全量页数；日常每轮跑「前 hot 页（追新）+ 轮转 rotate 页（补旧）」
 // 轮转游标保证整个榜单在 total/rotate 轮内被完整扫过一遍，从而让所有条目的 updated_at 都能刷新
 // —— 否则 TMDB 条款要求的 180 天过期清理会把从不进热榜的条目整批误删
@@ -16,26 +16,26 @@ const MIN_YEAR = 1996; // 只收录近 30 年
 // 非 dynamic 的榜单页数是刻意固定的窗口（趋势/正在上映只看最新几页），不能跟着 total_pages 放大
 const LISTS = [
   {
-    // 票数门槛放宽到 150 后总量 686 页，超 TMDB discover 单查询 500 页硬上限，按年份拆两段
+    // 票数门槛放宽到 150 后总量约 740 页，超 TMDB discover 单查询 500 页硬上限，按年份拆两段
     key: 'movie-popular', type: 'movie', path: '/discover/movie', total: 334, hot: 20, rotate: 20, dynamic: true,
     params: { sort_by: 'popularity.desc', 'vote_count.gte': 150, 'primary_release_date.gte': '2015-01-01' },
   },
   {
     // 旧段是固定集合（不再有新片流入），无需 hot 追新，全靠轮转补旧
-    key: 'movie-popular-old', type: 'movie', path: '/discover/movie', total: 352, hot: 0, rotate: 30, dynamic: true,
-    params: { sort_by: 'popularity.desc', 'vote_count.gte': 150, 'primary_release_date.gte': `${MIN_YEAR}-01-01`, 'primary_release_date.lte': '2014-12-31' },
+    key: 'movie-popular-old', type: 'movie', path: '/discover/movie', total: 405, hot: 0, rotate: 30, dynamic: true,
+    params: { sort_by: 'popularity.desc', 'vote_count.gte': 150, 'primary_release_date.gte': `${config.minYear}-01-01`, 'primary_release_date.lte': '2014-12-31' },
   },
   {
-    key: 'tv-popular', type: 'tv', path: '/discover/tv', total: 241, hot: 20, rotate: 20, dynamic: true,
-    params: { sort_by: 'popularity.desc', 'vote_count.gte': 75, 'first_air_date.gte': `${MIN_YEAR}-01-01` },
+    key: 'tv-popular', type: 'tv', path: '/discover/tv', total: 249, hot: 20, rotate: 20, dynamic: true,
+    params: { sort_by: 'popularity.desc', 'vote_count.gte': 75, 'first_air_date.gte': `${config.minYear}-01-01` },
   },
   {
-    key: 'movie-top', type: 'movie', path: '/discover/movie', total: 316, hot: 3, rotate: 7, dynamic: true,
-    params: { sort_by: 'vote_average.desc', 'vote_average.gte': 5, 'vote_count.gte': 500, 'primary_release_date.gte': `${MIN_YEAR}-01-01` },
+    key: 'movie-top', type: 'movie', path: '/discover/movie', total: 341, hot: 3, rotate: 7, dynamic: true,
+    params: { sort_by: 'vote_average.desc', 'vote_average.gte': 5, 'vote_count.gte': 500, 'primary_release_date.gte': `${config.minYear}-01-01` },
   },
   {
-    key: 'tv-top', type: 'tv', path: '/discover/tv', total: 99, hot: 3, rotate: 7, dynamic: true,
-    params: { sort_by: 'vote_average.desc', 'vote_average.gte': 5, 'vote_count.gte': 250, 'first_air_date.gte': `${MIN_YEAR}-01-01` },
+    key: 'tv-top', type: 'tv', path: '/discover/tv', total: 103, hot: 3, rotate: 7, dynamic: true,
+    params: { sort_by: 'vote_average.desc', 'vote_average.gte': 5, 'vote_count.gte': 250, 'first_air_date.gte': `${config.minYear}-01-01` },
   },
   { key: 'movie-trending', type: 'movie', path: '/trending/movie/week', total: 3, hot: 3, rotate: 0 },
   { key: 'tv-trending', type: 'tv', path: '/trending/tv/week', total: 3, hot: 3, rotate: 0 },
@@ -91,7 +91,7 @@ function saveItem(it, type) {
   const title = (movie ? it.title : it.name) ?? '';
   const year = date ? Number(date.slice(0, 4)) : null;
   if (!title) return 0;                        // 无标题视为无效条目
-  if (year && year < MIN_YEAR) return 0;       // 已知年份且超出范围则丢弃；未知年份保留
+  if (year && year < config.minYear) return 0; // 已知年份且早于下限则丢弃；未知年份保留
 
   const ts = now();
   upsertTitle.run(

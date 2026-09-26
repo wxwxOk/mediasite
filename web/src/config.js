@@ -8,6 +8,9 @@ export const config = {
   tmdbToken: process.env.TMDB_TOKEN ?? '',
   tmdbKey: process.env.TMDB_KEY ?? '',
   tmdbRps: num(process.env.TMDB_RPS, 8),
+  // 收录年份下限：TMDB 各列表查询的起始年，也是入库过滤的硬门槛。
+  // 调早会同步放大 movie-popular-old 段页数（1990 起约 405 页），逼近 TMDB discover 的 500 页硬上限
+  minYear: num(process.env.MIN_YEAR, 1990),
 
   // 0 表示不限制，一次跑完全部待补详情
   detailMaxPerRun: num(process.env.DETAIL_MAX_PER_RUN, 0),

@@ -15,6 +15,7 @@ services:
       - TZ=${TZ:-Asia/Shanghai}
       - PORT=8899
       - TMDB_RPS=${TMDB_RPS:-8}
+      - MIN_YEAR=${MIN_YEAR:-1990}   # 收录年份下限；调早会放大 movie-popular-old 段页数
       - IMGCACHE_MAX_MB=${IMGCACHE_MAX_MB:-2048}
       - FULL_SYNC=${FULL_SYNC:-0}   # 置 1 则下次启动强制全量重拉各榜单
       - SYNC_INTERVAL_H=${SYNC_INTERVAL_H:-24}
