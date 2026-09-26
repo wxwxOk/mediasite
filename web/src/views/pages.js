@@ -2,7 +2,7 @@ import { layout, esc, img } from './layout.js';
 
 const DECADES = [2020, 2010, 2000, 1990];
 const VOTES = [9, 8, 7, 6];
-const SORTS = { popularity: '按热度', vote: '按评分', newest: '最新上映', oldest: '最早上映', latest: '最近入库' };
+const SORTS = { popularity: '按热度', vote: '按评分', newest: '最新上映', oldest: '最早上映', latest: '最近入库', douban: '按豆瓣排名' };
 
 function qs(base, patch = {}) {
   const p = new URLSearchParams();
@@ -47,6 +47,7 @@ const card = (t) => `<div class="card">
       ${t.vote_average ? `<span class="badge">${t.vote_average.toFixed(1)}</span>` : ''}
       <span class="type">${t.media_type === 'movie' ? '电影' : '剧集'}</span>
       ${t.magnet_count > 0 ? `<span class="mag" title="磁力资源">🧲${t.magnet_count > 99 ? '99+' : t.magnet_count}</span>` : ''}
+      ${t.douban_rank ? `<span class="d250" title="豆瓣电影 Top250">#${t.douban_rank}</span>` : ''}
     </div>
     <div class="meta">
       <div class="t">${esc(t.title)}</div>
@@ -74,12 +75,13 @@ function pager(base, page, pages) {
   </div>`;
 }
 
-// active 用于非浏览类页面（如爬虫台）标记自身，不传时行为与从前完全一致
+// active 用于非浏览类页面（如爬虫台、Top250 榜）标记自身，不传时行为与从前完全一致
 // 切换类型时清掉类型（genre id 按电影/剧集分属两套，跨类型保留会错配）
 const tabs = (type, f, active = '') => `<nav class="tabs">
   <a class="${!active && !type ? 'on' : ''}" href="${qs(f, { type: '', page: 1, genre: [] })}">全部</a>
   <a class="${!active && type === 'movie' ? 'on' : ''}" href="${qs(f, { type: 'movie', page: 1, genre: [] })}">电影</a>
   <a class="${!active && type === 'tv' ? 'on' : ''}" href="${qs(f, { type: 'tv', page: 1, genre: [] })}">剧集</a>
+  <a class="${active === 'top250' ? 'on' : ''}" href="/top250">豆瓣250</a>
   <a href="/favorites">收藏</a>
   <a class="${active === 'crawler' ? 'on' : ''}" href="/crawler">爬虫</a>
 </nav>`;
@@ -114,12 +116,40 @@ export function browsePage({ result, f, genres, langs }) {
   })();
   </script>`;
 
-  const body = `<h1 style="margin:0 0 14px;font-size:20px">${f.q ? `搜索「${esc(f.q)}」` : '浏览'}</h1>
+  const head = f.q ? `搜索「${esc(f.q)}」` : '浏览';
+  const body = `<h1 style="margin:0 0 14px;font-size:20px">${head}</h1>
     ${filterBar}
     ${result.items.length ? `<div class="grid">${result.items.map(card).join('')}</div>` : '<div class="empty">没有匹配的结果</div>'}
     ${pager(f, result.page, result.pages)}`;
 
   return layout({ title: f.q || '浏览', q: f.q, tabs: tabs(f.type, f), body });
+}
+
+// 豆瓣 Top250 单独一页：整榜 250 条按名次平铺（不分页、无筛选），库内有收录的点进详情，榜外的只置灰不改跳外站
+export function top250Page(items) {
+  const inLib = items.filter((x) => x.id).length;
+  const card250 = (x) => {
+    const has = x.id != null;
+    const inner = `<div class="poster">
+        ${x.poster_path ? `<img src="${img(x.poster_path)}" alt="" loading="lazy">` : `<div class="none">${has ? '无海报' : '库内未收录'}</div>`}
+        <span class="rank">#${x.rank}</span>
+        <span class="type">${has ? (x.media_type === 'movie' ? '电影' : '剧集') : '豆瓣'}</span>
+        ${x.magnet_count > 0 ? `<span class="mag" title="磁力资源">🧲${x.magnet_count > 99 ? '99+' : x.magnet_count}</span>` : ''}
+      </div>
+      <div class="meta">
+        <div class="t">${esc(has ? x.title : x.db_title)}</div>
+        <div class="s">${x.db_year ?? '—'}${x.db_rating ? ` · 豆瓣 ${x.db_rating.toFixed(1)}` : ''}</div>
+      </div>`;
+    return `<div class="card${has ? '' : ' miss'}">
+      ${has ? `<a class="main" href="/t/${x.id}">${inner}</a>` : `<div class="main">${inner}</div>`}
+    </div>`;
+  };
+
+  const body = `<h1 style="margin:0 0 6px;font-size:20px">豆瓣电影 Top250</h1>
+    <p class="tip" style="margin:0 0 18px">榜单取自 movie.douban.com/top250，共 ${items.length} 条；库内已收录 <b>${inLib}</b> 条，未收录的仅置灰展示</p>
+    <div class="grid">${items.map(card250).join('')}</div>`;
+
+  return layout({ title: '豆瓣 Top250', q: '', tabs: tabs('', {}, 'top250'), body });
 }
 
 export function detailPage(t, fav) {
@@ -133,6 +163,7 @@ export function detailPage(t, fav) {
       ? e.runtime ? `<span>片长 <b>${e.runtime}</b> 分钟</span>` : ''
       : e.seasons ? `<span><b>${e.seasons}</b> 季 · <b>${e.episodes ?? '?'}</b> 集</span>` : '',
     t.vote_average ? `<span>评分 <b>${t.vote_average.toFixed(1)}</b> · ${t.vote_count} 人</span>` : '',
+    t.douban_rank ? `<span><a href="https://movie.douban.com/top250" target="_blank" rel="noopener">豆瓣 Top250 <b>#${t.douban_rank}</b></a></span>` : '',
     // 豆瓣占位：页面加载后异步请求 /api/douban/:id 填充，避免列表/详情渲染直接打豆瓣
     '<span id="douban" hidden></span>',
     t.rt_critics ? `<span><a href="${rtUrl(t)}" target="_blank" rel="noopener">烂番茄 <b>${t.rt_critics}%</b></a></span>` : '',
@@ -303,7 +334,7 @@ export function crawlerPage({ desired, state, alive }) {
     s.scalingFactor != null ? `<span>生效 scaling_factor <b>${s.scalingFactor}</b></span>` : '',
     s.torrents ? `<span>种子总量 <b>${s.torrents.total.toLocaleString()}</b></span>` : '',
     s.torrents ? `<span>昨日新增 <b>${s.torrents.yesterday.toLocaleString()}</b></span>` : '',
-    `<span title="时区 ${esc(s.tz ?? 'Asia/Shanghai')}">当地时间 <b>${esc(s.bjTime ?? '—')}</b></span>`,
+    `<span>北京时间 <b>${esc(s.bjTime ?? '—')}</b></span>`,
     s.nextChange ? `<span>下次切换 <b>${esc(s.nextChange)}</b></span>` : '',
     net ? `<span>网卡 ↓<b>${net.rxKBs}</b> ↑<b>${net.txKBs}</b> KB/s</span>` : '',
     net ? `<span>包速率 ↓<b>${net.rxPps}</b> ↑<b>${net.txPps}</b> pkt/s</span>` : '',
@@ -323,7 +354,7 @@ export function crawlerPage({ desired, state, alive }) {
       <button type="submit">保存</button>
     </form>
     <p class="alt">档位即 bitmagnet 的 <code>dht_crawler.scaling_factor</code>：并发与缓冲都乘以该值，是爬虫资源占用的总开关。官方默认 10，文档明写超过 10 收益递减。切换档位会重启爬虫容器；开关本身是秒级。</p>
-    <p class="alt">时间段按北京时间判定。网卡速率是整块网卡的总流量（含机器上所有其他服务），不是爬虫单独的。种子总量与昨日新增每分钟从 bitmagnet 数据库取样一次，昨日按调度时区的自然日计。</p>`;
+    <p class="alt">时间段按北京时间判定。网卡速率是整块网卡的总流量（含机器上所有其他服务），不是爬虫单独的。种子总量与昨日新增每分钟从 bitmagnet 数据库取样一次，昨日按北京时间自然日计。</p>`;
 
   return layout({ title: '爬虫', q: '', tabs: tabs('', {}, 'crawler'), body });
 }

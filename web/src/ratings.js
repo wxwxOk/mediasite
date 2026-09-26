@@ -58,6 +58,10 @@ async function fetchText(url, headers, gate, attempts = 2) {
 // 合法格式的 bid cookie（豆瓣下发的访客标识），降低无 cookie 请求被风控的概率
 const BID = Array.from({ length: 2 }, () => Math.random().toString(36).slice(2)).join('');
 
+// PC 页面的统一抓取入口（Top250 榜单页与 suggest 接口同用桌面 UA），共享同一节流闸
+export const doubanFetch = (url, ua = UA_DESKTOP) =>
+  fetchText(url, { 'User-Agent': ua, Referer: 'https://movie.douban.com/', Cookie: `bid=${BID}` }, doubanGate);
+
 // 标题归一化：去空格/标点/大小写差异，用于候选匹配
 const norm = (s) => String(s ?? '').toLowerCase().replace(/[\s　:：·.()（）\-—–/]+/g, '');
 
@@ -89,10 +93,7 @@ export async function doubanRating({ title, original_title, release_year: year, 
   if (!q) return null;
 
   // 主路径：subject_suggest 带年份，匹配更准
-  const text = await fetchText(
-    `https://movie.douban.com/j/subject_suggest?q=${encodeURIComponent(q)}`,
-    { 'User-Agent': UA_DESKTOP, Referer: 'https://movie.douban.com/', Cookie: `bid=${BID}` }, doubanGate
-  );
+  const text = await doubanFetch(`https://movie.douban.com/j/subject_suggest?q=${encodeURIComponent(q)}`);
   let list = [];
   try {
     list = Array.isArray(JSON.parse(text ?? '')) ? JSON.parse(text) : [];

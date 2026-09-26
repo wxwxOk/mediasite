@@ -8,15 +8,19 @@ const SORT = {
   newest: 't.release_date DESC',
   oldest: 't.release_date ASC',
   latest: 't.created_at DESC',
+  // 榜外条目排在末尾（SQLite 的 NULL 默认排最前），故先按是否为 NULL 分组
+  douban: 'douban_rank IS NULL, douban_rank',
 };
 
 // LIKE 的 % _ \ 是元字符，用户输入需转义后再配 ESCAPE
 const likeEsc = (s) => s.replace(/[\\%_]/g, (c) => `\\${c}`);
 
-// 豆瓣评分只在详情页实时抓取（见 routes.js /api/douban/:id），不进列表查询
+// 豆瓣评分只在详情页实时抓取（见 routes.js /api/douban/:id），不进列表查询；
+// douban_rank 是 Top250 的榜内名次（榜单快照表，见 douban250.js），卡片上的排名角标与「豆瓣排名」排序都取自它
 const LIST_COLS = `t.id, t.tmdb_id, t.media_type, t.title, t.original_title,
   t.poster_path, t.release_date, t.release_year, t.vote_average, t.vote_count, t.popularity,
-  t.rt_critics, t.rt_audience, t.rt_vanity, t.magnet_count`;
+  t.rt_critics, t.rt_audience, t.rt_vanity, t.magnet_count,
+  (SELECT d.rank FROM douban_top250 d WHERE d.title_id = t.id) AS douban_rank`;
 
 function buildWhere(p) {
   const where = [];
@@ -69,6 +73,16 @@ export function listTitles(p = {}) {
   return { items, total, page, pages, pageSize };
 }
 
+// 豆瓣 Top250 独立页：整榜 250 条按名次出，LEFT JOIN 库内条目（未收录的也要展示，库里没有而已）
+export function listTop250() {
+  return db
+    .prepare(`SELECT d.rank, d.douban_id, d.title AS db_title, d.year AS db_year, d.rating AS db_rating,
+                t.id, t.title, t.poster_path, t.media_type, t.magnet_count
+              FROM douban_top250 d LEFT JOIN titles t ON t.id = d.title_id
+              ORDER BY d.rank`)
+    .all();
+}
+
 export function getTitle(id) {
   const t = db.prepare('SELECT * FROM titles WHERE id = ?').get(id);
   if (!t) return null;
@@ -78,6 +92,7 @@ export function getTitle(id) {
               WHERE tg.title_id = ? ORDER BY g.name`)
     .all(t.media_type, t.id);
   t.extra = t.extra ? JSON.parse(t.extra) : null;
+  t.douban_rank = db.prepare('SELECT rank FROM douban_top250 WHERE title_id = ?').get(id)?.rank ?? null;
   return t;
 }
 

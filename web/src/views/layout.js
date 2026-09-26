@@ -44,6 +44,11 @@ main{padding:20px;max-width:1500px;margin:0 auto}
 .badge{position:absolute;top:6px;left:6px;background:rgba(0,0,0,.7);border-radius:6px;padding:2px 6px;font-size:12px;font-weight:600;color:#ffd166}
 .type{position:absolute;top:6px;right:6px;background:rgba(0,0,0,.7);border-radius:6px;padding:2px 6px;font-size:11px;color:var(--dim)}
 .mag{position:absolute;bottom:6px;left:6px;background:rgba(0,0,0,.7);border-radius:6px;padding:2px 6px;font-size:11px;color:#57b26b}
+.d250{position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,.7);border-radius:6px;padding:2px 6px;font-size:11px;font-weight:600;color:#57b26b}
+.rank{position:absolute;top:6px;left:6px;background:rgba(0,0,0,.78);border-radius:6px;padding:2px 7px;font-size:13px;font-weight:700;color:#ffd166}
+.card.miss{opacity:.5;cursor:default}
+.card.miss:hover{transform:none}
+.tip{color:var(--dim);font-size:13px}
 .meta{padding:8px 10px}
 .meta .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .meta .s{color:var(--dim);font-size:12px;margin-top:2px}

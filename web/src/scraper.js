@@ -1,10 +1,11 @@
 import { readdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { db, tx, now, getMeta, setMeta } from './db.js';
+import { db, tx, now, getMeta, setMeta, upsertTitle, selectTitleId, clearGenres, addGenre } from './db.js';
 import { tmdb } from './tmdb.js';
 import { config } from './config.js';
 import { rtRating } from './ratings.js';
 import { checkMagnets } from './magnets.js';
+import { syncTop250 } from './douban250.js';
 
 const MIN_YEAR = 1996; // 只收录近 30 年
 
@@ -69,31 +70,6 @@ function pagePlan(list, firstRun) {
   return pages;
 }
 
-const upsertTitle = db.prepare(`
-  INSERT INTO titles (tmdb_id, media_type, title, original_title, overview, poster_path,
-    backdrop_path, release_date, release_year, vote_average, vote_count, popularity,
-    original_language, origin_country, genre_ids, created_at, updated_at)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  ON CONFLICT(tmdb_id, media_type) DO UPDATE SET
-    title             = excluded.title,
-    original_title    = excluded.original_title,
-    overview          = excluded.overview,
-    poster_path       = excluded.poster_path,
-    backdrop_path     = excluded.backdrop_path,
-    release_date      = excluded.release_date,
-    release_year      = excluded.release_year,
-    vote_average      = excluded.vote_average,
-    vote_count        = excluded.vote_count,
-    popularity        = excluded.popularity,
-    original_language = excluded.original_language,
-    origin_country    = excluded.origin_country,
-    genre_ids         = excluded.genre_ids,
-    updated_at        = excluded.updated_at
-`);
-
-const selectId = db.prepare('SELECT id FROM titles WHERE tmdb_id = ? AND media_type = ?');
-const clearGenres = db.prepare('DELETE FROM title_genres WHERE title_id = ?');
-const addGenre = db.prepare('INSERT OR IGNORE INTO title_genres (title_id, genre_id) VALUES (?,?)');
 const saveDetail = db.prepare('UPDATE titles SET extra = ?, detail_fetched_at = ? WHERE id = ?');
 // TMDB 条款：缓存不得超过 6 个月。已收藏的条目保留，避免清掉用户数据
 const purgeStale = db.prepare(`
@@ -149,7 +125,7 @@ async function syncList(list, pages) {
         const id = saveItem(it, list.type);
         if (!id) continue;
         written++;
-        const row = selectId.get(it.id, list.type);
+        const row = selectTitleId.get(it.id, list.type);
         clearGenres.run(row.id);
         for (const g of it.genre_ids ?? []) addGenre.run(row.id, g);
       }
@@ -358,6 +334,14 @@ export async function runSync() {
     }
 
     setMeta('full_sync_done', '1');
+
+    // 榜单本身按周期刷新，但库内条目的解析与列表同步同频，新入库的片下次跑就能挂上排名
+    try {
+      stats.top250 = await syncTop250();
+    } catch (e) {
+      console.warn(`[sync] top250 失败: ${e.message}`);
+    }
+
     stats.details = await enrichDetails(config.detailMaxPerRun);
     stats.ratings = await enrichRatings(config.ratingMaxPerRun);
     stats.magnets = await enrichMagnets(config.magnetMaxPerRun);

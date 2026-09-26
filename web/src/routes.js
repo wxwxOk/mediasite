@@ -7,10 +7,10 @@ import { db, now } from './db.js';
 import { doubanRating } from './ratings.js';
 import { COOKIE, authEnabled, checkPassword, issue, verify } from './auth.js';
 import {
-  listTitles, getTitle, getGenres, getLanguages, getFavorites, getFavorite,
+  listTitles, listTop250, getTitle, getGenres, getLanguages, getFavorites, getFavorite,
   setFavorite, removeFavorite,
 } from './queries.js';
-import { browsePage, detailPage, favoritesPage, loginPage, crawlerPage } from './views/pages.js';
+import { browsePage, top250Page, detailPage, favoritesPage, loginPage, crawlerPage } from './views/pages.js';
 import { checkMagnets } from './magnets.js';
 import { setAuthEnabled } from './views/layout.js';
 import { readDesired, readState, writeDesired, normalize, agentAlive } from './crawler.js';
@@ -101,6 +101,9 @@ export default async function routes(app) {
     const result = listTitles({ ...f, page: Number(f.page) });
     return html(reply, browsePage({ result, f, genres: getGenres(f.type), langs: getLanguages() }));
   });
+
+  // 豆瓣 Top250 榜单独占一页，不参与筛选/排序，只按名次平铺
+  app.get('/top250', (req, reply) => html(reply, top250Page(listTop250())));
 
   app.get('/t/:id', (req, reply) => {
     const t = getTitle(Number(req.params.id));

@@ -22,6 +22,9 @@ export const config = {
   doubanRps: num(process.env.DOUBAN_RPS, 1),
   algoliaRps: num(process.env.ALGOLIA_RPS, 5),
 
+  // 豆瓣 Top250 榜单快照的刷新周期（天）；榜单变动极慢，抓取失败会沿用旧快照
+  douban250RefreshDays: num(process.env.DOUBAN250_REFRESH_DAYS, 7),
+
   syncIntervalH: num(process.env.SYNC_INTERVAL_H, 24),
   fullSync: process.env.FULL_SYNC === '1',
 

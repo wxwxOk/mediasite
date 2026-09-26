@@ -65,6 +65,20 @@ CREATE TABLE IF NOT EXISTS favorites (
 CREATE INDEX IF NOT EXISTS ix_fav_status ON favorites(status, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+
+-- 豆瓣电影 Top250 榜单快照；title_id 由 douban250.js 按片名+年份解析到库内条目
+CREATE TABLE IF NOT EXISTS douban_top250 (
+  rank       INTEGER PRIMARY KEY,
+  douban_id  TEXT    NOT NULL,
+  title      TEXT    NOT NULL,
+  alt        TEXT,
+  year       INTEGER,
+  rating     REAL,
+  votes      INTEGER,
+  title_id   INTEGER REFERENCES titles(id) ON DELETE SET NULL,
+  updated_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_db250_title ON douban_top250(title_id);
 `);
 
 // 评分列迁移：新库建表后、旧库启动时统一走 ALTER，避免两处 DDL 不一致
@@ -81,6 +95,32 @@ for (const [name, type] of [
 db.exec('CREATE INDEX IF NOT EXISTS ix_titles_rating ON titles(rating_fetched_at)');
 // 索引必须建在 ALTER 之后：旧库先建会 no such column
 db.exec('CREATE INDEX IF NOT EXISTS ix_titles_magnet ON titles(magnet_checked_at)');
+
+// titles / title_genres 的写入只此一处，TMDB 列表同步与 Top250 补录共用，避免两处列清单漂移
+export const upsertTitle = db.prepare(`
+  INSERT INTO titles (tmdb_id, media_type, title, original_title, overview, poster_path,
+    backdrop_path, release_date, release_year, vote_average, vote_count, popularity,
+    original_language, origin_country, genre_ids, created_at, updated_at)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  ON CONFLICT(tmdb_id, media_type) DO UPDATE SET
+    title             = excluded.title,
+    original_title    = excluded.original_title,
+    overview          = excluded.overview,
+    poster_path       = excluded.poster_path,
+    backdrop_path     = excluded.backdrop_path,
+    release_date      = excluded.release_date,
+    release_year      = excluded.release_year,
+    vote_average      = excluded.vote_average,
+    vote_count        = excluded.vote_count,
+    popularity        = excluded.popularity,
+    original_language = excluded.original_language,
+    origin_country    = excluded.origin_country,
+    genre_ids         = excluded.genre_ids,
+    updated_at        = excluded.updated_at
+`);
+export const selectTitleId = db.prepare('SELECT id FROM titles WHERE tmdb_id = ? AND media_type = ?');
+export const clearGenres = db.prepare('DELETE FROM title_genres WHERE title_id = ?');
+export const addGenre = db.prepare('INSERT OR IGNORE INTO title_genres (title_id, genre_id) VALUES (?,?)');
 
 export const now = () => new Date().toISOString();
 

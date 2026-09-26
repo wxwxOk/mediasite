@@ -9,6 +9,8 @@
 ## 它长什么样
 
 - **发现**：TMDB 热门/高分/趋势/正在上映等榜单，按电影、剧集、年份、类型筛选，支持收藏与打分
+- **豆瓣 Top250**：整榜 250 条按名次单独一页平铺；库内没有的（多为 1996 年前的老片，
+  TMDB 榜单窗口之外）按片名单独搜 TMDB 补录进库，与列表同步进来的条目结构一致
 - **评分**：TMDB 之外补齐豆瓣与烂番茄（批量抓 + 详情页实时抓，带缓存与节流）
 - **磁力**：对每个条目实时检索 DHT 索引，按做种数、分辨率、中文字幕、季集整理，标注同名噪声
 - **爬虫控制台**：网页上切换爬虫启停模式、抓取档位、运行时段，实时看运行状态、网速与种子总量/昨日新增
@@ -111,6 +113,7 @@ loginctl enable-linger $USER     # 未登录时也持续运行
 │   ├── src/
 │   │   ├── scraper.js       # 榜单同步排期（热榜追新 + 轮转补旧）
 │   │   ├── ratings.js       # 豆瓣 / 烂番茄抓取
+│   │   ├── douban250.js     # 豆瓣 Top250 榜单快照、片名解析与榜内缺片补录
 │   │   ├── providers/       # 磁力来源：bitmagnet、Prowlarr，及相关性/季集/字幕解析
 │   │   └── crawler.js       # 控制协议的数据层（读写上面两个 JSON）
 │   └── docker-compose.yml
@@ -133,6 +136,7 @@ loginctl enable-linger $USER     # 未登录时也持续运行
 | `SITE_SECRET` | web | 会话签名密钥，`openssl rand -hex 32` 生成 |
 | `BIND_ADDR` | web | `0.0.0.0` 才对外，前提是已设 `SITE_PASSWORD` |
 | `HTTP_PROXY` / `HTTPS_PROXY` | web | 访问 TMDB / 豆瓣走代理；国内网络不填则同步一直失败（日志刷 `sync failed`）|
+| `DOUBAN250_REFRESH_DAYS` | web | 豆瓣 Top250 快照与榜内补录的刷新周期（天），默认 7 |
 | `TMDB_API_KEY` | crawler | bitmagnet 富化用 |
 | `MEDIASITE_DATA_DIR` | agent | 站点 `data/` 的绝对路径 |
 | `NET_IFACE` | agent | 网速采样的网卡，默认自动取默认路由那块 |
