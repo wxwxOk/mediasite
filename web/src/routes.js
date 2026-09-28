@@ -7,10 +7,10 @@ import { db, now } from './db.js';
 import { doubanRating } from './ratings.js';
 import { COOKIE, authEnabled, checkPassword, issue, verify } from './auth.js';
 import {
-  listTitles, listTop250, getTitle, getGenres, getLanguages, getFavorites, getFavorite,
-  setFavorite, removeFavorite,
+  KINDS, listTitles, listTop250, getTitle, getGenres, getLanguages, getFavorites, getFavorite,
+  setFavorite, removeFavorite, getPerson, personCounts, listPersonWorks,
 } from './queries.js';
-import { browsePage, top250Page, detailPage, favoritesPage, loginPage, crawlerPage } from './views/pages.js';
+import { browsePage, top250Page, detailPage, personPage, favoritesPage, loginPage, crawlerPage } from './views/pages.js';
 import { checkMagnets } from './magnets.js';
 import { searchTmdb, pickExact, pullTitle } from './ondemand.js';
 import { setAuthEnabled } from './views/layout.js';
@@ -153,6 +153,19 @@ export default async function routes(app) {
     const t = getTitle(Number(req.params.id));
     if (!t) return reply.code(404).type('text/html; charset=utf-8').send('404 未找到该条目');
     return html(reply, detailPage(t, getFavorite(t.id), req.query.added === '1'));
+  });
+
+  // 演职员作品页：默认展示作品最多的那个身份（导演兼演员时两者数量差很大）
+  app.get('/person/:id', (req, reply) => {
+    const id = Number(req.params.id);
+    const person = getPerson(id);
+    if (!person) return reply.code(404).type('text/html; charset=utf-8').send('404 未找到该演职员');
+    const counts = personCounts(id);
+    const kinds = Object.keys(KINDS);
+    const kind = kinds.includes(req.query.kind)
+      ? req.query.kind
+      : kinds.reduce((a, b) => (counts[b] > counts[a] ? b : a));
+    return html(reply, personPage({ person, counts, kind, result: listPersonWorks(id, kind, req.query.page) }));
   });
 
   app.get('/favorites', (req, reply) => html(reply, favoritesPage(getFavorites())));

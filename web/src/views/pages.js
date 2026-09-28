@@ -1,17 +1,19 @@
 import { layout, esc, img } from './layout.js';
+import { KINDS } from '../queries.js';
 
 const DECADES = [2020, 2010, 2000, 1990];
 const VOTES = [9, 8, 7, 6];
 const SORTS = { popularity: '按热度', vote: '按评分', newest: '最新上映', oldest: '最早上映', latest: '最近入库', douban: '按豆瓣排名' };
 
-function qs(base, patch = {}) {
+// path 默认首页（筛选栏全在 / 上），演职员作品页传自己的路径
+function qs(base, patch = {}, path = '/') {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries({ ...base, ...patch })) {
     if (v == null || v === '') continue;
     for (const x of Array.isArray(v) ? v : [v]) p.append(k, x);
   }
   const s = p.toString();
-  return s ? `/?${s}` : '/';
+  return s ? `${path}?${s}` : path;
 }
 
 const options = (vals, cur, label) =>
@@ -57,7 +59,7 @@ const card = (t) => `<div class="card">
   ${ratingRow(t)}
 </div>`;
 
-function pager(base, page, pages) {
+function pager(base, page, pages, path = '/') {
   if (pages <= 1) return '';
   const nums = [...new Set([1, pages, page - 2, page - 1, page, page + 1, page + 2])]
     .filter((n) => n >= 1 && n <= pages)
@@ -66,12 +68,12 @@ function pager(base, page, pages) {
   let prev = 0;
   for (const n of nums) {
     if (n - prev > 1) mid += '<span class="gap">…</span>';
-    mid += n === page ? `<b>${n}</b>` : `<a href="${qs(base, { page: n })}">${n}</a>`;
+    mid += n === page ? `<b>${n}</b>` : `<a href="${qs(base, { page: n }, path)}">${n}</a>`;
     prev = n;
   }
   return `<div class="pager">
-    ${page > 1 ? `<a href="${qs(base, { page: page - 1 })}">上一页</a>` : ''}${mid}
-    ${page < pages ? `<a href="${qs(base, { page: page + 1 })}">下一页</a>` : ''}
+    ${page > 1 ? `<a href="${qs(base, { page: page - 1 }, path)}">上一页</a>` : ''}${mid}
+    ${page < pages ? `<a href="${qs(base, { page: page + 1 }, path)}">下一页</a>` : ''}
   </div>`;
 }
 
@@ -197,11 +199,19 @@ export function detailPage(t, fav, added = false) {
   const isMovie = t.media_type === 'movie';
   const STATUS = { want: '想看', watching: '在看', done: '看过' };
 
+  // 主创按姓名出 chip 并入 facts（人少，照片反而占地方），点击进作品页
+  const crew = (label, arr) => (Array.isArray(arr) && arr.length
+    ? `<span>${label} ${arr.map((p) => `<a href="/person/${p.id}">${esc(p.name)}</a>`).join(' / ')}</span>`
+    : '');
+
   const facts = [
     t.release_year ? `<span>${t.release_year}${t.release_date ? `-${esc(t.release_date.slice(5))}` : ''}</span>` : '',
     isMovie
       ? e.runtime ? `<span>片长 <b>${e.runtime}</b> 分钟</span>` : ''
       : e.seasons ? `<span><b>${e.seasons}</b> 季 · <b>${e.episodes ?? '?'}</b> 集</span>` : '',
+    crew('导演', e.director),
+    crew('编剧', e.writer),
+    crew('创作者', e.creator),
     t.vote_average ? `<span>评分 <b>${t.vote_average.toFixed(1)}</b> · ${t.vote_count} 人</span>` : '',
     t.douban_rank ? `<span><a href="https://movie.douban.com/top250" target="_blank" rel="noopener">豆瓣 Top250 <b>#${t.douban_rank}</b></a></span>` : '',
     // 豆瓣占位：页面加载后异步请求 /api/douban/:id 填充，避免列表/详情渲染直接打豆瓣
@@ -214,10 +224,14 @@ export function detailPage(t, fav, added = false) {
     t.original_language ? `<span>${esc(t.original_language.toUpperCase())}</span>` : '',
   ].filter(Boolean).join('');
 
-  const cast = (e.cast ?? []).length
-    ? `<h2>主要演员</h2><div class="cast">${e.cast
-        .map((c) => `<div>${c.img ? `<img src="${img(c.img, 'w185')}" alt="" loading="lazy">` : ''}<div>${esc(c.name)}</div></div>`)
-        .join('')}</div>`
+  // 回填完成前的旧数据没有 person id，退回纯展示不做链接
+  const personTile = (p) => {
+    const inner = `${p.img ? `<img src="${img(p.img, 'w185')}" alt="" loading="lazy">` : ''}<div>${esc(p.name)}</div>`;
+    return p.id ? `<a href="/person/${p.id}">${inner}</a>` : `<div>${inner}</div>`;
+  };
+
+  const cast = Array.isArray(e.cast) && e.cast.length
+    ? `<h2>主要演员</h2><div class="cast">${e.cast.map(personTile).join('')}</div>`
     : '';
 
   const body = `<div class="detail">
@@ -335,6 +349,29 @@ export function detailPage(t, fav, added = false) {
   ${cast}`;
 
   return layout({ title: t.title, q: '', tabs: tabs('', {}), body });
+}
+
+// 演职员作品页：一个人一页，按 kind 切 tab（见 queries.listPersonWorks）；只有一种身份时不摆 tab
+export function personPage({ person, counts, kind, result }) {
+  const kinds = Object.keys(KINDS).filter((k) => counts[k]);
+  const bar = kinds.length > 1
+    ? `<div class="chips" style="margin:0 0 16px">${kinds
+        .map((k) => `<a class="chip${k === kind ? ' on' : ''}" href="/person/${person.id}?kind=${k}">${KINDS[k]} <b>${counts[k]}</b></a>`)
+        .join('')}</div>`
+    : '';
+
+  const body = `<div class="detail">
+    <div class="poster" style="width:140px">${person.profile_path ? `<img src="${img(person.profile_path, 'w185')}" alt="">` : '<div class="none">无照片</div>'}</div>
+    <div class="info">
+      <h1>${esc(person.name)}</h1>
+      <p class="alt">库内共 ${counts.total} 部作品</p>
+    </div>
+  </div>
+  ${bar}
+  ${result.items.length ? `<div class="grid">${result.items.map(card).join('')}</div>` : '<div class="empty">库内暂无作品</div>'}
+  ${pager({ kind }, result.page, result.pages, `/person/${person.id}`)}`;
+
+  return layout({ title: person.name, q: '', tabs: tabs('', {}), body });
 }
 
 export function loginPage(failed) {

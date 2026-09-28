@@ -5,7 +5,7 @@ import { tmdb } from './tmdb.js';
 import { config } from './config.js';
 import { refreshRating } from './ratings.js';
 import { checkMagnets } from './magnets.js';
-import { buildExtra, saveDetail } from './titles.js';
+import { fetchDetail, saveDetails } from './titles.js';
 import { syncTop250 } from './douban250.js';
 import { syncOndemand } from './ondemand.js';
 
@@ -78,6 +78,8 @@ const purgeStale = db.prepare(`
   WHERE updated_at < ? AND id NOT IN (SELECT title_id FROM favorites)
 `);
 const CACHE_DAYS = 180;
+// 条目被清后演职员可能只剩孤儿（作品页为空），顺手删掉，免得 people 表只涨不落
+const purgeOrphanPeople = db.prepare('DELETE FROM people WHERE id NOT IN (SELECT person_id FROM title_credits)');
 const pendingDetails = db.prepare(`
   SELECT id, tmdb_id, media_type FROM titles
   WHERE detail_fetched_at IS NULL
@@ -153,10 +155,12 @@ const DETAIL_BATCH = 200;
 
 async function enrichDetails(budget) {
   let done = 0;
+  // 本轮已失败的条目不再重复取（否则队列不收敛）：不写标记，留待下一轮重试
+  const failed = new Set();
   for (;;) {
     if (budget > 0 && done >= budget) break;
     const limit = budget > 0 ? Math.min(DETAIL_BATCH, budget - done) : DETAIL_BATCH;
-    const rows = pendingDetails.all(limit);
+    const rows = pendingDetails.all(limit).filter((r) => !failed.has(r.id));
     if (!rows.length) break;
 
     let i = 0;
@@ -166,13 +170,13 @@ async function enrichDetails(budget) {
         const type = row.media_type;
         let d;
         try {
-          d = await tmdb(`/${type}/${row.tmdb_id}`, { append_to_response: 'credits' });
+          d = await fetchDetail(type, row.tmdb_id);
         } catch {
-          saveDetail.run(JSON.stringify({ error: 'fetch_failed' }), now(), row.id);
+          failed.add(row.id);
           done++;
           continue;
         }
-        saveDetail.run(JSON.stringify(buildExtra(type, d)), now(), row.id);
+        saveDetails(row.id, type, d);
         done++;
       }
     };
@@ -319,6 +323,7 @@ export async function runSync() {
 
     const cutoff = new Date(Date.now() - CACHE_DAYS * 86400_000).toISOString();
     stats.purged = purgeStale.run(cutoff).changes;
+    if (stats.purged) purgeOrphanPeople.run();
     stats.imgPruned = await pruneImageCache();
     setMeta('last_sync_at', now());
     stats.elapsedMs = Date.now() - startedAt;

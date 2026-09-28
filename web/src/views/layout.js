@@ -86,6 +86,8 @@ p.ov{line-height:1.75;white-space:pre-wrap}
 .cast{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:12px}
 .cast div{text-align:center;font-size:12px;color:var(--dim)}
 .cast img{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:8px;background:var(--card)}
+.cast a:hover img{outline:2px solid var(--acc);outline-offset:-2px}
+.cast a:hover div{color:var(--fg)}
 .empty{color:var(--dim);padding:60px 0;text-align:center}
 .fav{display:flex;gap:8px;align-items:center;margin-top:18px;flex-wrap:wrap}
 .fav b{color:var(--dim);font-weight:600}

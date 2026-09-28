@@ -54,6 +54,25 @@ CREATE TABLE IF NOT EXISTS title_genres (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS ix_tg_genre ON title_genres(genre_id);
 
+-- 演职员：people 是 TMDB person 维度（id 即 TMDB person id），title_credits 是 join 表。
+-- extra 里仍留一份前 12 位演员与导演/编剧供详情页渲染，这张表供「某人的全部作品」查询——
+-- 与 genre_ids / title_genres 是同一套「JSON 快照 + join 表」双写关系
+CREATE TABLE IF NOT EXISTS people (
+  id           INTEGER PRIMARY KEY,
+  name         TEXT    NOT NULL,
+  profile_path TEXT
+);
+
+CREATE TABLE IF NOT EXISTS title_credits (
+  title_id  INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+  person_id INTEGER NOT NULL,
+  kind      TEXT    NOT NULL CHECK (kind IN ('cast','director','writer')),
+  role      TEXT    NOT NULL DEFAULT '',
+  ord       INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (title_id, person_id, kind)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS ix_tc_person ON title_credits(person_id, kind);
+
 CREATE TABLE IF NOT EXISTS favorites (
   title_id   INTEGER PRIMARY KEY REFERENCES titles(id) ON DELETE CASCADE,
   status     TEXT    NOT NULL CHECK (status IN ('want','watching','done')),
@@ -128,6 +147,12 @@ export const upsertTitle = db.prepare(`
 export const selectTitleId = db.prepare('SELECT id FROM titles WHERE tmdb_id = ? AND media_type = ?');
 export const clearGenres = db.prepare('DELETE FROM title_genres WHERE title_id = ?');
 export const addGenre = db.prepare('INSERT OR IGNORE INTO title_genres (title_id, genre_id) VALUES (?,?)');
+export const clearCredits = db.prepare('DELETE FROM title_credits WHERE title_id = ?');
+export const addCredit = db.prepare(
+  'INSERT OR REPLACE INTO title_credits (title_id, person_id, kind, role, ord) VALUES (?,?,?,?,?)'
+);
+export const upsertPerson = db.prepare(`INSERT INTO people (id, name, profile_path) VALUES (?,?,?)
+  ON CONFLICT(id) DO UPDATE SET name = excluded.name, profile_path = excluded.profile_path`);
 
 export const now = () => new Date().toISOString();
 
@@ -150,3 +175,11 @@ const setMetaStmt = db.prepare(
 
 export const getMeta = (k) => getMetaStmt.get(k)?.v ?? null;
 export const setMeta = (k, v) => setMetaStmt.run(k, String(v));
+
+// 一次性回填：早期只存前 12 位演员，且 person id 与 crew（导演/编剧）被丢弃，需要全库重抓一遍 credits。
+// 入队方式是把既有条目重新置为待补详情——detail_fetched_at 自此的含义即「详情与演职员均已取回」，
+// 取回失败不再写错误标记而保留下轮重试（否则会覆盖已抓好的 extra）
+if (!getMeta('credits_backfill_done')) {
+  db.exec('UPDATE titles SET detail_fetched_at = NULL');
+  setMeta('credits_backfill_done', '1');
+}

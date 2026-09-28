@@ -96,6 +96,34 @@ export function getTitle(id) {
   return t;
 }
 
+// 演职员作品页：分类即 title_credits.kind，键序即 tab 顺序，标签两处共用（见 views/pages.js）
+export const KINDS = { cast: '参演', director: '导演', writer: '编剧' };
+
+export function getPerson(id) {
+  return db.prepare('SELECT id, name, profile_path FROM people WHERE id = ?').get(id) ?? null;
+}
+
+export function personCounts(id) {
+  const rows = db.prepare('SELECT kind, count(*) AS n FROM title_credits WHERE person_id = ? GROUP BY kind').all(id);
+  return {
+    ...Object.fromEntries(Object.keys(KINDS).map((k) => [k, rows.find((r) => r.kind === k)?.n ?? 0])),
+    // 一人可在一部片里兼导演与编剧，合计要去重
+    total: db.prepare('SELECT count(DISTINCT title_id) AS n FROM title_credits WHERE person_id = ?').get(id).n,
+  };
+}
+
+// 只出库内条目（join titles），按上映倒序——作品页关心的是「有哪些片」而不是站内热度
+export function listPersonWorks(personId, kind, page) {
+  const from = `FROM title_credits c JOIN titles t ON t.id = c.title_id WHERE c.person_id = ? AND c.kind = ?`;
+  const total = db.prepare(`SELECT count(*) AS n ${from}`).get(personId, kind).n;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const p = Math.min(Math.max(1, Number(page) || 1), pages);
+  const items = db
+    .prepare(`SELECT ${LIST_COLS} ${from} ORDER BY t.release_date DESC, t.id DESC LIMIT ? OFFSET ?`)
+    .all(personId, kind, PAGE_SIZE, (p - 1) * PAGE_SIZE);
+  return { items, total, page: p, pages };
+}
+
 export function getGenres(type) {
   if (type === 'movie' || type === 'tv') {
     return db.prepare('SELECT id, name FROM genres WHERE media_type = ? ORDER BY name').all(type);
