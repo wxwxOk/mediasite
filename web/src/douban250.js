@@ -1,7 +1,8 @@
-import { db, tx, now, getMeta, setMeta, upsertTitle, selectTitleId, clearGenres, addGenre } from './db.js';
+import { db, tx, now, getMeta, setMeta } from './db.js';
 import { config } from './config.js';
 import { doubanFetch } from './ratings.js';
 import { tmdb } from './tmdb.js';
+import { importTitle } from './titles.js';
 
 // 豆瓣电影 Top250 榜。网页无 API：PC 列表页 /top250?start=N 带 bid cookie 可直接抓，10 页 × 25 条。
 // 榜单变动极慢，按周期刷新，失败沿用旧快照；库内片名是 TMDB 的 zh-CN 字段，与豆瓣主片名高度一致，
@@ -148,24 +149,6 @@ async function findOnTmdb(e) {
   return null;
 }
 
-// 写库走与列表同步同一条 INSERT；详情字段（genres/origin_country）在 /movie/{id} 里一次取全，
-// extra（演职员等）留给 scraper 的 enrichDetails 补，路径与列表进来的条目完全一致
-function saveMovie(d) {
-  const date = d.release_date || '';
-  const ts = now();
-  upsertTitle.run(
-    d.id, 'movie', d.title ?? '', d.original_title ?? null, d.overview ?? null,
-    d.poster_path ?? null, d.backdrop_path ?? null, date || null, date ? Number(date.slice(0, 4)) : null,
-    d.vote_average ?? 0, d.vote_count ?? 0, d.popularity ?? 0,
-    d.original_language ?? null, JSON.stringify(d.origin_country ?? []),
-    JSON.stringify((d.genres ?? []).map((g) => g.id)), ts, ts
-  );
-  const id = selectTitleId.get(d.id, 'movie').id;
-  clearGenres.run(id);
-  for (const g of d.genres ?? []) addGenre.run(id, g.id);
-  return id;
-}
-
 export async function syncTop250() {
   const last = getMeta('douban250_synced_at');
   const stale = !last || Date.now() - Date.parse(last) > config.douban250RefreshDays * 86400_000;
@@ -206,7 +189,7 @@ export async function syncTop250() {
           console.log(`[top250] TMDB 无匹配，跳过: ${e.rank}. ${e.title} (${e.year ?? '?'})`);
           continue;
         }
-        setLink.run(saveMovie(await tmdb(`/movie/${tmdbId}`)), e.rank);
+        setLink.run(await importTitle('movie', tmdbId), e.rank);
         filled++;
       } catch (err) {
         errors++;
@@ -216,7 +199,7 @@ export async function syncTop250() {
     const cutoff = new Date(Date.now() - config.douban250RefreshDays * 86400_000).toISOString();
     for (const t of staleLinked.all(cutoff)) {
       try {
-        saveMovie(await tmdb(`/movie/${t.tmdb_id}`));
+        await importTitle('movie', t.tmdb_id);
         refreshed++;
       } catch { /* 取不到就留旧数据，下一轮再说 */ }
     }

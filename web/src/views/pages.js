@@ -86,7 +86,42 @@ const tabs = (type, f, active = '') => `<nav class="tabs">
   <a class="${active === 'crawler' ? 'on' : ''}" href="/crawler">爬虫</a>
 </nav>`;
 
-export function browsePage({ result, f, genres, langs }) {
+const votes = (n) => (n >= 1e4 ? `${(n / 1e4).toFixed(1)}万` : String(n ?? 0));
+
+// 搜索兜底区（见 routes.js tmdbLookup）：库内没有的片给一条从 TMDB 补录的路，点选后 POST /api/import
+function tmdbSection(box, f) {
+  if (box.state === 'filtered') {
+    return `<p class="tip">库内其实有 <b>${box.total}</b> 条匹配，只是被当前筛选条件挡住了 · <a href="${qs({ q: f.q })}" style="color:var(--acc)">查看全部</a></p>`;
+  }
+  if (box.state === 'error') return '<p class="tip">TMDB 暂时不可用，稍后再试。</p>';
+  if (box.state === 'none') return `<p class="tip">TMDB 上也没有找到「${esc(f.q)}」的匹配条目。</p>`;
+
+  const cand = (c) => `<div class="card">
+    <div class="main">
+      <div class="poster">
+        ${c.poster_path ? `<img src="${img(c.poster_path)}" alt="" loading="lazy">` : '<div class="none">无海报</div>'}
+        ${c.vote_average ? `<span class="badge">${c.vote_average.toFixed(1)}</span>` : ''}
+        <span class="type">${c.media_type === 'movie' ? '电影' : '剧集'}</span>
+      </div>
+      <div class="meta">
+        <div class="t" title="${esc(c.original_title ?? '')}">${esc(c.title)}</div>
+        <div class="s">${c.year ?? '—'} · ${votes(c.vote_count)}人评</div>
+      </div>
+    </div>
+    <form class="imp" method="post" action="/api/import">
+      <input type="hidden" name="media_type" value="${c.media_type}">
+      <input type="hidden" name="tmdb_id" value="${c.tmdb_id}">
+      <button type="submit">加入影视库</button>
+    </form>
+    <a class="tlink" href="https://www.themoviedb.org/${c.media_type}/${c.tmdb_id}" target="_blank" rel="noopener">在 TMDB 查看</a>
+  </div>`;
+
+  return `<h2>TMDB 匹配结果 · 库内未收录</h2>
+    <p class="tip" style="margin:0 0 12px">点「加入影视库」按需补录，不受收录年份下限限制。</p>
+    <div class="grid">${box.items.map(cand).join('')}</div>`;
+}
+
+export function browsePage({ result, f, genres, langs, tmdb }) {
   const groups = [
     ['lang', '语言', langs.map((l) => [l.code, LANG_LABEL[l.code] ?? l.code.toUpperCase()]), f.lang],
     ['genre', '类型', genres.map((g) => [g.id, g.name]), f.genre],
@@ -100,7 +135,7 @@ export function browsePage({ result, f, genres, langs }) {
     ${f.q ? `<input type="hidden" name="q" value="${esc(f.q)}">` : ''}
     ${f.type ? `<input type="hidden" name="type" value="${esc(f.type)}">` : ''}
     ${groups.map(([name, label, pairs, sel, single]) => `<div class="fgroup"><span class="flabel">${label}</span><div class="chips">${chips(name, pairs, sel, single)}</div></div>`).join('')}
-    <span class="count">共 ${result.total} 条${active ? ` · <a href="${qs({ q: f.q, type: f.type })}">重置</a>` : ''}</span>
+    <span class="count">共 ${result.total} 条${f.q && result.total && !tmdb ? ` · <a href="${qs(f, { tmdb: 1, page: 1 })}">TMDB 补录</a>` : ''}${active ? ` · <a href="${qs({ q: f.q, type: f.type })}">重置</a>` : ''}</span>
   </form>
   <script>
   (() => {
@@ -117,10 +152,15 @@ export function browsePage({ result, f, genres, langs }) {
   </script>`;
 
   const head = f.q ? `搜索「${esc(f.q)}」` : '浏览';
+  // 有 TMDB 兜底区时不摆「没有匹配的结果」：兜底区自己会把情况说清楚
+  const list = result.items.length
+    ? `<div class="grid">${result.items.map(card).join('')}</div>`
+    : tmdb ? '' : '<div class="empty">没有匹配的结果</div>';
   const body = `<h1 style="margin:0 0 14px;font-size:20px">${head}</h1>
     ${filterBar}
-    ${result.items.length ? `<div class="grid">${result.items.map(card).join('')}</div>` : '<div class="empty">没有匹配的结果</div>'}
-    ${pager(f, result.page, result.pages)}`;
+    ${list}
+    ${pager(f, result.page, result.pages)}
+    ${tmdb ? tmdbSection(tmdb, f) : ''}`;
 
   return layout({ title: f.q || '浏览', q: f.q, tabs: tabs(f.type, f), body });
 }
@@ -152,7 +192,7 @@ export function top250Page(items) {
   return layout({ title: '豆瓣 Top250', q: '', tabs: tabs('', {}, 'top250'), body });
 }
 
-export function detailPage(t, fav) {
+export function detailPage(t, fav, added = false) {
   const e = t.extra ?? {};
   const isMovie = t.media_type === 'movie';
   const STATUS = { want: '想看', watching: '在看', done: '看过' };
@@ -184,6 +224,7 @@ export function detailPage(t, fav) {
     <div class="poster">${t.poster_path ? `<img src="${img(t.poster_path, 'w500')}" alt="">` : '<div class="none">无海报</div>'}</div>
     <div class="info">
       <h1>${esc(t.title)}</h1>
+      ${added ? '<p class="added">已从 TMDB 补录加入影视库</p>' : ''}
       ${t.original_title && t.original_title !== t.title ? `<div class="alt">${esc(t.original_title)}</div>` : ''}
       <div class="facts">${facts}</div>
       <script>

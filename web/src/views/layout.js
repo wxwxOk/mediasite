@@ -48,6 +48,11 @@ main{padding:20px;max-width:1500px;margin:0 auto}
 .rank{position:absolute;top:6px;left:6px;background:rgba(0,0,0,.78);border-radius:6px;padding:2px 7px;font-size:13px;font-weight:700;color:#ffd166}
 .card.miss{opacity:.5;cursor:default}
 .card.miss:hover{transform:none}
+.card .imp{padding:0 10px 4px}
+.card .imp button{width:100%;font-size:12px;padding:5px 0}
+.card .tlink{display:block;padding:0 10px 9px;font-size:11px;color:var(--dim)}
+.card .tlink:hover{color:var(--acc)}
+.added{color:#57b26b;margin:0 0 8px;font-size:13px}
 .tip{color:var(--dim);font-size:13px}
 .meta{padding:8px 10px}
 .meta .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

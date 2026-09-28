@@ -12,6 +12,7 @@ import {
 } from './queries.js';
 import { browsePage, top250Page, detailPage, favoritesPage, loginPage, crawlerPage } from './views/pages.js';
 import { checkMagnets } from './magnets.js';
+import { searchTmdb, pickExact, pullTitle } from './ondemand.js';
 import { setAuthEnabled } from './views/layout.js';
 import { readDesired, readState, writeDesired, normalize, agentAlive } from './crawler.js';
 
@@ -41,6 +42,29 @@ const html = (reply, body) => reply.type('text/html; charset=utf-8').send(body);
 // 无需登录即可访问：登录页、图片代理、logo、健康检查
 const OPEN = (url) =>
   url === '/healthz' || url === '/login' || url === '/tmdb-logo.svg' || url.startsWith('/img/');
+
+// 搜索兜底：库内一条都没搜到时按片名去 TMDB 找。收录年份下限（config.minYear）之外的片子各榜单查询取不到，
+// 正常同步永远收不进来，这条是它们唯一的入库通道（另一条是豆瓣 Top250 的缺片补录）。
+// 归一化同名且唯一命中就直接补录，返回 id 交给路由跳详情页；否则返回候选列表由用户点选
+async function tmdbLookup(q, miss, log) {
+  // 也可能只是被筛选条件挡住了：不带任何筛选再查一次，是这种情况就不必打 TMDB
+  if (miss) {
+    const n = listTitles({ q, pageSize: 1 }).total;
+    if (n) return { state: 'filtered', total: n };
+  }
+  try {
+    const items = await searchTmdb(q);
+    if (!items.length) return { state: 'none' };
+    if (miss) {
+      const hit = pickExact(q, items);
+      if (hit) return { state: 'imported', id: await pullTitle(hit.media_type, hit.tmdb_id) };
+    }
+    return { state: 'candidates', items };
+  } catch (e) {
+    log.warn({ q, err: e.message }, 'tmdb search failed');
+    return { state: 'error' };
+  }
+}
 
 export default async function routes(app) {
   await app.register(cookie);
@@ -87,7 +111,7 @@ export default async function routes(app) {
     return req.headers.accept?.includes('text/html') ? reply.redirect(`/t/${id}`) : { ok: true };
   });
 
-  app.get('/', (req, reply) => {
+  app.get('/', async (req, reply) => {
     const f = {
       q: pick(req.query.q),
       type: pick(req.query.type),
@@ -99,7 +123,27 @@ export default async function routes(app) {
       page: pick(req.query.page) || '1',
     };
     const result = listTitles({ ...f, page: Number(f.page) });
-    return html(reply, browsePage({ result, f, genres: getGenres(f.type), langs: getLanguages() }));
+
+    // 搜不到就顺带去 TMDB 找一趟；带 ?tmdb=1 时即便库内有结果也再列一次候选，供挑别的版本
+    let tmdb = null;
+    if (f.q && (result.total === 0 || req.query.tmdb === '1')) {
+      tmdb = await tmdbLookup(f.q, result.total === 0, req.log);
+      if (tmdb.state === 'imported') return reply.redirect(`/t/${tmdb.id}?added=1`);
+    }
+    return html(reply, browsePage({ result, f, genres: getGenres(f.type), langs: getLanguages(), tmdb }));
+  });
+
+  // 候选卡片上的「加入影视库」：按 TMDB id 补录单条，落库后直接进详情页
+  app.post('/api/import', async (req, reply) => {
+    const type = req.body?.media_type === 'tv' ? 'tv' : 'movie';
+    const tmdbId = Number(req.body?.tmdb_id);
+    if (!Number.isInteger(tmdbId) || tmdbId <= 0) return reply.code(400).send({ error: 'bad tmdb_id' });
+    try {
+      return reply.redirect(`/t/${await pullTitle(type, tmdbId)}?added=1`);
+    } catch (e) {
+      req.log.warn({ type, tmdbId, err: e.message }, 'import failed');
+      return reply.code(502).type('text/html; charset=utf-8').send('TMDB 拉取失败，请稍后重试');
+    }
   });
 
   // 豆瓣 Top250 榜单独占一页，不参与筛选/排序，只按名次平铺
@@ -108,7 +152,7 @@ export default async function routes(app) {
   app.get('/t/:id', (req, reply) => {
     const t = getTitle(Number(req.params.id));
     if (!t) return reply.code(404).type('text/html; charset=utf-8').send('404 未找到该条目');
-    return html(reply, detailPage(t, getFavorite(t.id)));
+    return html(reply, detailPage(t, getFavorite(t.id), req.query.added === '1'));
   });
 
   app.get('/favorites', (req, reply) => html(reply, favoritesPage(getFavorites())));

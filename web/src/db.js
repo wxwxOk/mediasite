@@ -79,6 +79,13 @@ CREATE TABLE IF NOT EXISTS douban_top250 (
   updated_at TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_db250_title ON douban_top250(title_id);
+
+-- 搜索按需补录（见 ondemand.js）的条目账本：这些片不在任何榜单里，updated_at 不会自己刷新，
+-- 同样需要按周期回捞，否则会被 scraper 的 180 天过期清理删掉
+CREATE TABLE IF NOT EXISTS ondemand_titles (
+  title_id INTEGER PRIMARY KEY REFERENCES titles(id) ON DELETE CASCADE,
+  added_at TEXT    NOT NULL
+);
 `);
 
 // 评分列迁移：新库建表后、旧库启动时统一走 ALTER，避免两处 DDL 不一致

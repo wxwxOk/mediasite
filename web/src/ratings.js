@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import { db, now } from './db.js';
 
 // 豆瓣与烂番茄的评分补充抓取。两个数据源都没有可用的官方公开 API：
 // - 豆瓣：/j/subject_suggest 搜索匹配条目，再抓 m.douban.com 移动端详情页拿评分
@@ -65,8 +66,8 @@ export const doubanFetch = (url, ua = UA_DESKTOP) =>
 // 标题归一化：去空格/标点/大小写差异，用于候选匹配
 const norm = (s) => String(s ?? '').toLowerCase().replace(/[\s　:：·.()（）\-—–/]+/g, '');
 
-// 归一化后完全相等 2 分，互相包含 1 分
-const titleScore = (a, b) => {
+// 归一化后完全相等 2 分，互相包含 1 分。除评分候选外，搜索兜底的 TMDB 候选判重也用这把尺子（见 ondemand.js）
+export const titleScore = (a, b) => {
   const x = norm(a);
   const y = norm(b);
   if (!x || !y) return 0;
@@ -185,4 +186,27 @@ export async function rtRating({ title, original_title, release_year: year, medi
   const audience = rt.audienceScore ?? null;
   if (!critics && !audience) return null; // 该片暂无任何评分，不值得存
   return { critics, audience, vanity: best.vanity ?? null };
+}
+
+// 抓取并落库单条（入参即 SQL 行，同 rtRating 的字段口径），与 magnets.js 的 checkMagnets 对称：
+// 批量路径在 scraper.enrichRatings，按需补录的条目当场补，免得在热度队列里排队等几周
+const saveRating = db.prepare(`
+  UPDATE titles SET rt_critics=?, rt_audience=?, rt_vanity=?, rating_fetched_at=? WHERE id=?
+`);
+
+export async function refreshRating({ id, title, original_title, release_year, media_type }) {
+  let r = null;
+  let failed = false;
+  try {
+    r = await rtRating({ title, original_title, release_year, media_type });
+  } catch (e) {
+    failed = true;
+    console.warn(`[ratings] 烂番茄 ${id} ${title}: ${e.message}`);
+  }
+  saveRating.run(
+    r?.critics ?? null, r?.audience ?? null, r?.vanity ?? null,
+    failed ? new Date(Date.now() - Math.max(1, config.ratingRefreshDays - 1) * 86400_000).toISOString() : now(),
+    id
+  );
+  return r;
 }

@@ -3,9 +3,11 @@ import { join } from 'node:path';
 import { db, tx, now, getMeta, setMeta, upsertTitle, selectTitleId, clearGenres, addGenre } from './db.js';
 import { tmdb } from './tmdb.js';
 import { config } from './config.js';
-import { rtRating } from './ratings.js';
+import { refreshRating } from './ratings.js';
 import { checkMagnets } from './magnets.js';
+import { buildExtra, saveDetail } from './titles.js';
 import { syncTop250 } from './douban250.js';
+import { syncOndemand } from './ondemand.js';
 
 // 收录年份下限见 config.minYear（默认 1990）。含年份过滤的榜单都以它为起点，
 // 2015 是 movie-popular 两段的固定拆分点（单查询超 500 页硬上限），不随 minYear 变
@@ -70,7 +72,6 @@ function pagePlan(list, firstRun) {
   return pages;
 }
 
-const saveDetail = db.prepare('UPDATE titles SET extra = ?, detail_fetched_at = ? WHERE id = ?');
 // TMDB 条款：缓存不得超过 6 个月。已收藏的条目保留，避免清掉用户数据
 const purgeStale = db.prepare(`
   DELETE FROM titles
@@ -171,26 +172,7 @@ async function enrichDetails(budget) {
           done++;
           continue;
         }
-        const extra = type === 'movie'
-          ? {
-              runtime: d.runtime ?? null,
-              status: d.status ?? null,
-              tagline: d.tagline || null,
-              imdb_id: d.imdb_id ?? null,
-              budget: d.budget || null,
-              revenue: d.revenue || null,
-            }
-          : {
-              seasons: d.number_of_seasons ?? null,
-              episodes: d.number_of_episodes ?? null,
-              status: d.status ?? null,
-              tagline: d.tagline || null,
-              last_air_date: d.last_air_date ?? null,
-            };
-        extra.cast = (d.credits?.cast ?? []).slice(0, 12).map((c) => ({
-          name: c.name, role: c.character, img: c.profile_path ?? null,
-        }));
-        saveDetail.run(JSON.stringify(extra), now(), row.id);
+        saveDetail.run(JSON.stringify(buildExtra(type, d)), now(), row.id);
         done++;
       }
     };
@@ -200,17 +182,12 @@ async function enrichDetails(budget) {
 }
 
 // 烂番茄评分补充抓取（豆瓣改为详情页实时抓取，见 routes.js /api/douban/:id）。
-// 待抓 = 从未抓过 或 已超过刷新周期；网络失败把时间戳拨到「明天到期」，
-// 接口恢复后一天内自动重试，而不是干等整个刷新周期
+// 待抓 = 从未抓过 或 已超过刷新周期；单条的抓取与落库见 ratings.refreshRating
 const pendingRatings = db.prepare(`
   SELECT id, title, original_title, release_year, media_type FROM titles
   WHERE rating_fetched_at IS NULL OR rating_fetched_at < ?
   ORDER BY popularity DESC LIMIT ?
 `);
-const saveRating = db.prepare(`
-  UPDATE titles SET rt_critics=?, rt_audience=?, rt_vanity=?, rating_fetched_at=? WHERE id=?
-`);
-
 const RATING_CONCURRENCY = 3;
 const RATING_BATCH = 100;
 
@@ -226,20 +203,7 @@ async function enrichRatings(budget) {
     let i = 0;
     const worker = async () => {
       while (i < rows.length) {
-        const row = rows[i++];
-        let r = null;
-        let failed = false;
-        try {
-          r = await rtRating(row);
-        } catch (e) {
-          failed = true;
-          console.warn(`[ratings] 烂番茄 ${row.id} ${row.title}: ${e.message}`);
-        }
-        saveRating.run(
-          r?.critics ?? null, r?.audience ?? null, r?.vanity ?? null,
-          failed ? new Date(Date.now() - Math.max(1, config.ratingRefreshDays - 1) * 86400_000).toISOString() : now(),
-          row.id
-        );
+        await refreshRating(rows[i++]);
         done++;
       }
     };
@@ -340,6 +304,13 @@ export async function runSync() {
       stats.top250 = await syncTop250();
     } catch (e) {
       console.warn(`[sync] top250 失败: ${e.message}`);
+    }
+
+    // 按需补录的条目回捞：它们不在任何榜单里，不主动刷新就会被下面的 180 天清理删掉
+    try {
+      stats.ondemand = await syncOndemand();
+    } catch (e) {
+      console.warn(`[sync] ondemand 回捞失败: ${e.message}`);
     }
 
     stats.details = await enrichDetails(config.detailMaxPerRun);
