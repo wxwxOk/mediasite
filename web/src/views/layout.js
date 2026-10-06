@@ -88,6 +88,10 @@ p.ov{line-height:1.75;white-space:pre-wrap}
 .cast img{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:8px;background:var(--card)}
 .cast a:hover img{outline:2px solid var(--acc);outline-offset:-2px}
 .cast a:hover div{color:var(--fg)}
+/* 演职员作品页：头部（照片+姓名）与作品网格之间留出间距，否则贴着很挤 */
+.phead{margin-bottom:22px}
+.detail.phead .poster{width:140px}
+.pchips{margin:0 0 22px}
 .empty{color:var(--dim);padding:60px 0;text-align:center}
 .fav{display:flex;gap:8px;align-items:center;margin-top:18px;flex-wrap:wrap}
 .fav b{color:var(--dim);font-weight:600}
@@ -112,6 +116,17 @@ table.mg td.n b.zh{font-size:11px;font-weight:600;color:#57b26b;border:1px solid
 table.mg button{padding:3px 10px;font-size:12px}
 footer{border-top:1px solid var(--line);margin-top:40px;padding:18px 20px;color:var(--dim);font-size:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 footer img{height:14px;vertical-align:middle}
+.play{max-width:1000px;margin:0 auto}
+.play h1{font-size:20px;margin:0 0 12px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.play h1 a{font-size:13px;color:var(--dim)}
+.play h1 a:hover{color:var(--acc)}
+.vwrap{background:#000;border-radius:10px;overflow:hidden}
+.vwrap video{width:100%;display:block;aspect-ratio:16/9;background:#000}
+.pbar{color:var(--dim);font-size:13px;margin:10px 0;min-height:20px}
+.pfile{font-size:13px;color:var(--dim)}
+.pfile select{max-width:100%;margin-top:4px}
+button[data-h]{color:#57b26b}
+button[data-h]:hover{border-color:#57b26b}
 `;
 
 // 鉴权开启时才在页脚露出退出入口，避免无鉴权时显示无意义的链接

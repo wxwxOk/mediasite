@@ -314,7 +314,7 @@ export function detailPage(t, fav, added = false) {
               + '<td>' + E(m.quality) + '</td>'
               + '<td>' + E(m.sources.join(' + ')) + '</td>'
               + '<td>' + E((m.publishedAt ?? '').slice(0, 10)) + '</td>'
-              + '<td><button type="button" data-m="' + E(m.magnet) + '">复制</button></td></tr>').join('')
+              + '<td><button type="button" data-h="' + E(m.infoHash) + '">播放</button> <button type="button" data-m="' + E(m.magnet) + '">复制</button></td></tr>').join('')
           + '</table>' : '');
 
       box.querySelectorAll('.mgtabs button').forEach((b) => {
@@ -325,9 +325,40 @@ export function detailPage(t, fav, added = false) {
       });
       box.querySelectorAll('button[data-m]').forEach((b) => {
         b.onclick = async () => {
-          try { await navigator.clipboard.writeText(b.dataset.m); b.textContent = '已复制'; }
-          catch { b.textContent = '复制失败'; }
+          let ok = false;
+          // Clipboard API 仅安全上下文（HTTPS/localhost）可用——局域网 http://IP 访问时它不存在，
+          // 退化到 execCommand + 隐藏 textarea（经典方案，非安全上下文可用）
+          if (navigator.clipboard) {
+            try { await navigator.clipboard.writeText(b.dataset.m); ok = true; } catch {}
+          }
+          if (!ok) {
+            const ta = document.createElement('textarea');
+            ta.value = b.dataset.m; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;opacity:0';
+            document.body.appendChild(ta); ta.select();
+            try { ok = document.execCommand('copy'); } catch {}
+            ta.remove();
+          }
+          b.textContent = ok ? '已复制' : '复制失败';
           setTimeout(() => { b.textContent = '复制'; }, 1500);
+        };
+      });
+      box.querySelectorAll('button[data-h]').forEach((b) => {
+        b.onclick = async () => {
+          b.disabled = true; b.textContent = '获取元数据…';
+          try {
+            const r = await fetch('/api/play/prepare', {
+              method: 'POST', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ id: box.dataset.id, hash: b.dataset.h }),
+            });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+            location.href = '/play/' + box.dataset.id + '?h=' + b.dataset.h
+              + (d.guessedFileIdx != null ? '&f=' + d.guessedFileIdx : '');
+          } catch (e) {
+            b.textContent = e.message;
+            b.disabled = false;
+            setTimeout(() => { b.textContent = '播放'; }, 4000);
+          }
         };
       });
     };
@@ -351,17 +382,125 @@ export function detailPage(t, fav, added = false) {
   return layout({ title: t.title, q: '', tabs: tabs('', {}), body });
 }
 
+// 播放页：骨架立即渲染；页面 JS 先 prepare（幂等）拿文件表，再向 /api/play/stream 要地址。
+// 直出播放失败自动 force 回退 HLS；iOS 无 MSE 走原生 HLS，其余用 vendored hls.js
+export function playPage(t, hash, f) {
+  return layout({ title: `播放 ${t.title}`, body: `
+  <div class="play">
+    <h1>${esc(t.title)}<a class="alt" href="/t/${t.id}">返回详情</a></h1>
+    <div class="vwrap"><video id="v" controls autoplay playsinline></video></div>
+    <p class="pbar" id="bar">正在获取资源元数据…</p>
+    <p class="pfile" id="files"></p>
+  </div>
+  <script src="/hls.min.js"></script>
+  <script>
+  (() => {
+    const V = document.getElementById('v'), BAR = document.getElementById('bar'), FILES = document.getElementById('files');
+    const HASH = ${JSON.stringify(hash)}, ID = ${t.id};
+    let F = ${f ?? 'null'}, hls = null, mode = null, fellBack = false;
+
+    // 设备能否解 HEVC：能则声明给服务端，HEVC 源（4K 主流）走零转码 remux 直拷由设备硬解，本机不烧 CPU
+    const HEVC = (() => {
+      try {
+        const s = 'video/mp4; codecs="hvc1.2.4.L153.B0"';
+        return !!(V.canPlayType(s) || (window.MediaSource && MediaSource.isTypeSupported(s)));
+      } catch { return false; }
+    })();
+
+    const start = async (force) => {
+      if (hls) { hls.destroy(); hls = null; }
+      mode = null;
+      const r = await fetch('/api/play/stream', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ hash: HASH, f: F, force, hevc: HEVC }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+      if (d.mode === 'direct') { mode = 'direct'; V.src = d.url; }
+      else if (V.canPlayType('application/vnd.apple.mpegurl')) { mode = 'hls'; V.src = d.url; }
+      else if (window.Hls && Hls.isSupported()) {
+        mode = 'hls';
+        hls = new Hls();
+        hls.on(Hls.Events.ERROR, (ev, data) => {
+          if (!data.fatal) return;
+          mode = null;
+          BAR.textContent = '播放出错：' + (data.details || data.type);
+        });
+        hls.loadSource(d.url); hls.attachMedia(V);
+      } else throw new Error('此浏览器不支持 HLS 播放');
+      BAR.textContent = d.mode === 'hls' ? '流式播放中…' : '直连播放中…';
+      V.play().catch(() => {});
+    };
+
+    V.addEventListener('error', () => {
+      if (!V.src || !mode) return;
+      if (mode === 'direct' && !fellBack) {
+        fellBack = true;
+        BAR.textContent = '直出不兼容，切换转码…';
+        start('hls').catch((e) => { BAR.textContent = '播放失败：' + e.message; });
+      } else {
+        BAR.textContent = '播放失败：资源不可播或浏览器不支持';
+      }
+    });
+
+    const fail = (e) => { BAR.textContent = '无法开始播放：' + e.message; };
+
+    (async () => {
+      let d;
+      try {
+        const r = await fetch('/api/play/prepare', { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id: ID, hash: HASH }) });
+        d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
+      } catch (e) { return fail(e); }
+      if (F == null) F = d.guessedFileIdx;
+      if (F == null) return fail(new Error('未找到可播放的视频文件'));
+      const files = d.files || [];
+      if (files.length > 1) {
+        FILES.innerHTML = '文件：<select id="fsel">' + files.map((x) =>
+          '<option value="' + x.idx + '"' + (x.idx === F ? ' selected' : '') + '>' +
+          E(x.name) + ' （' + (x.length / 1048576).toFixed(0) + 'MB）</option>').join('') + '</select>';
+        document.getElementById('fsel').onchange = (ev) => {
+          F = Number(ev.target.value); fellBack = false;
+          start().catch((e2) => { BAR.textContent = '播放失败：' + e2.message; });
+        };
+      }
+      try { await start(); } catch (e) { fail(e); }
+    })();
+
+    // 播放中每 4 秒刷新下载状态；标签页关闭/刷新时通知服务端停种（幂等）
+    setInterval(async () => {
+      if (!mode) return;
+      try {
+        const r = await fetch('/api/play/stats?h=' + HASH + '&f=' + F);
+        if (!r.ok) return;
+        const s = await r.json();
+        const sp = s.downloadSpeed >= 1048576
+          ? (s.downloadSpeed / 1048576).toFixed(1) + ' MB/s'
+          : Math.round((s.downloadSpeed || 0) / 1024) + ' KB/s';
+        const pr = s.streamProgress != null ? Math.round(s.streamProgress * 100) + '%' : '—';
+        BAR.textContent = (hls ? '流式' : '直连') + ' · 下载 ' + sp + ' · peers ' + (s.peers ?? 0) + ' · 缓冲 ' + pr;
+      } catch {}
+    }, 4000);
+
+    // 必须带 JSON 体：无体 POST 经反向代理（如 Cloudflare 隧道）会被改写成 chunked 且无 Content-Type，
+    // Fastify 直接 415 拒收——曾导致关页停播静默失效、种子继续下载
+    addEventListener('pagehide', () => {
+      navigator.sendBeacon('/api/play/stop?h=' + HASH + (F != null ? '&f=' + F : ''), new Blob(['{}'], { type: 'application/json' }));
+    });
+  })();
+  </script>` });
+}
+
 // 演职员作品页：一个人一页，按 kind 切 tab（见 queries.listPersonWorks）；只有一种身份时不摆 tab
 export function personPage({ person, counts, kind, result }) {
   const kinds = Object.keys(KINDS).filter((k) => counts[k]);
   const bar = kinds.length > 1
-    ? `<div class="chips" style="margin:0 0 16px">${kinds
+    ? `<div class="chips pchips">${kinds
         .map((k) => `<a class="chip${k === kind ? ' on' : ''}" href="/person/${person.id}?kind=${k}">${KINDS[k]} <b>${counts[k]}</b></a>`)
         .join('')}</div>`
     : '';
 
-  const body = `<div class="detail">
-    <div class="poster" style="width:140px">${person.profile_path ? `<img src="${img(person.profile_path, 'w185')}" alt="">` : '<div class="none">无照片</div>'}</div>
+  const body = `<div class="detail phead">
+    <div class="poster">${person.profile_path ? `<img src="${img(person.profile_path, 'w185')}" alt="">` : '<div class="none">无照片</div>'}</div>
     <div class="info">
       <h1>${esc(person.name)}</h1>
       <p class="alt">库内共 ${counts.total} 部作品</p>

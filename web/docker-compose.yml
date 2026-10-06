@@ -26,6 +26,37 @@ services:
       # node 内置 fetch 不认这两个变量，NODE_USE_ENV_PROXY=1 才会启用。
       # NO_PROXY 必须含 host.docker.internal，否则访问 Prowlarr / bitmagnet 会被丢进代理。
       - NODE_USE_ENV_PROXY=1
-      - NO_PROXY=localhost,127.0.0.1,host.docker.internal,.douban.com
+      # stream 是 compose 内网服务名，必须直连（不经代理）
+      - NO_PROXY=localhost,127.0.0.1,host.docker.internal,.douban.com,stream
+      # 播放 sidecar 地址（默认即下方 stream 服务；sidecar 跑在别处时覆盖为 http://host.docker.internal:11470）
+      - STREAM_URL=${STREAM_URL:-http://stream:11470}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  # 播放 sidecar：BT 边下边播 + HLS 转码（stremio-libtorrent-server）。11470 不对宿主发布，仅经 compose 内网访问
+  stream:
+    image: androshack/stremio-libtorrent-server:latest
+    container_name: stremio-stream
+    restart: unless-stopped
+    # VAAPI 硬编需要核显节点；无 /dev/dri 的机器删掉这两行（转码自动退到 CPU，慢且吃满核心）
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      # 缓存预算须大于常看的单文件体积；播完即停种；UPnP 关（无意做端口映射）
+      - STREMIOSRV_CACHE_SIZE=${STREMIOSRV_CACHE_SIZE:-30GiB}
+      - STREMIOSRV_SEED_ON_COMPLETE=false
+      - STREMIOSRV_ENABLE_UPNP=false
+      # 慢种下 8MB piece 等 30s 供应不上会掐断转码拉流，放宽到 120s
+      - STREMIOSRV_STREAM_PIECE_TIMEOUT=120
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      - stream-data:/root/.stremio-server
+      # patch：vaapi 转码分支改为 CPU 软解 + 硬编（老 Intel 核显的 VAAPI 不支持 HEVC Main10 硬解，
+      # 10bit x265 源在原全硬链上必死；详见文件头注释）
+      - ./sidecar/converter.py:/srv/app/src/stremiosrv/transcode/converter.py:ro
+    ports:
+      - "6881:6881/tcp"
+      - "6881:6881/udp"
+
+volumes:
+  stream-data:

@@ -38,6 +38,10 @@ export const config = {
   prowlarrUrl: process.env.PROWLARR_URL ?? 'http://host.docker.internal:9696',
   prowlarrKey: process.env.PROWLARR_API_KEY ?? '',
 
+  // 播放 sidecar（stremio-libtorrent-server）：宿主直接跑时连本机 11470，compose 里指向 stream 服务
+  streamUrl: (process.env.STREAM_URL ?? 'http://127.0.0.1:11470').replace(/\/+$/, ''),
+  streamMaxWidth: num(process.env.STREAM_MAX_WIDTH, 1920),
+
   imgcacheMaxMb: num(process.env.IMGCACHE_MAX_MB, 2048),
 };
 

@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { Readable } from 'node:stream';
 import cookie from '@fastify/cookie';
 import formbody from '@fastify/formbody';
 import { config } from './config.js';
@@ -10,11 +11,12 @@ import {
   KINDS, listTitles, listTop250, getTitle, getGenres, getLanguages, getFavorites, getFavorite,
   setFavorite, removeFavorite, getPerson, personCounts, listPersonWorks,
 } from './queries.js';
-import { browsePage, top250Page, detailPage, personPage, favoritesPage, loginPage, crawlerPage } from './views/pages.js';
+import { browsePage, top250Page, detailPage, personPage, favoritesPage, loginPage, crawlerPage, playPage } from './views/pages.js';
 import { checkMagnets } from './magnets.js';
 import { searchTmdb, pickExact, pullTitle } from './ondemand.js';
 import { setAuthEnabled } from './views/layout.js';
 import { readDesired, readState, writeDesired, normalize, agentAlive } from './crawler.js';
+import { isHash, createTorrent, decide, stats, stop } from './playback.js';
 
 const IMG_BASE = 'https://image.tmdb.org/t/p/';
 const SIZES = new Set(['w92', 'w154', 'w185', 'w342', 'w500', 'w780', 'original']);
@@ -192,6 +194,112 @@ export default async function routes(app) {
     return { count: items.length, filtered, live, items };
   });
 
+  // ===== 播放（磁力 → sidecar 流） =====
+
+  // 详情页点磁力行「播放」：加种并阻塞到元数据就绪，返回文件表；前端随后跳播放页
+  app.post('/api/play/prepare', async (req, reply) => {
+    if (!getTitle(Number(req.body?.id))) return reply.code(404).send({ error: 'title not found' });
+    const hash = String(req.body?.hash ?? '').toLowerCase();
+    if (!isHash(hash)) return reply.code(400).send({ error: 'bad infohash' });
+    try {
+      return await createTorrent(hash);
+    } catch (e) {
+      req.log.warn({ hash, err: e.message }, 'play prepare failed');
+      return reply.code(e.status === 504 ? 504 : 502).send({ error: '元数据获取失败：该资源可能已无可用做种' });
+    }
+  });
+
+  // 播放页开播前决策：probe 源文件后返回直出或 HLS 代理 URL（force='hls' 为前端回退通道）
+  app.post('/api/play/stream', async (req, reply) => {
+    const hash = String(req.body?.hash ?? '').toLowerCase();
+    const f = Number(req.body?.f);
+    if (!isHash(hash) || !Number.isInteger(f) || f < 0) return reply.code(400).send({ error: 'bad params' });
+    try {
+      return await decide(hash, f, req.body?.force, !!req.body?.hevc);
+    } catch (e) {
+      req.log.warn({ hash, f, err: e.message }, 'play decide failed');
+      return reply.code(502).send({ error: '流服务不可用' });
+    }
+  });
+
+  // 播放页状态轮询（下载速度 / 缓冲进度 / peers）
+  app.get('/api/play/stats', async (req, reply) => {
+    const hash = String(req.query.h ?? '').toLowerCase();
+    const f = Number(req.query.f);
+    if (!isHash(hash) || !Number.isInteger(f)) return reply.code(400).send({ error: 'bad params' });
+    try {
+      return await stats(hash, f);
+    } catch {
+      return reply.code(502).send({ error: 'unavailable' });
+    }
+  });
+
+  // 停播清理：sendBeacon 只能 POST，参数放 query 最省事；失败静默（sidecar 有闲置回收兜底）。
+  // 独立作用域挂 catch-all 解析器：代理链会送来看不出类型的空体 POST（Cloudflare 把无体请求改写成
+  // chunked 且无 Content-Type），Fastify 默认 415 会把它整个掐掉——停播通知必须无条件收下
+  await app.register(async (scope) => {
+    scope.addContentTypeParser('*', (req, payload, done) => {
+      payload.once('end', () => done(null, null));
+      payload.once('error', done);
+      payload.resume();
+    });
+    scope.post('/api/play/stop', async (req) => {
+      const hash = String(req.query.h ?? '').toLowerCase();
+      if (isHash(hash)) await stop(hash, Number(req.query.f));
+      return { ok: true };
+    });
+  });
+
+  // 播放页：SSR 只管骨架，文件表与播放地址由页面 JS 走上面几个 API 获取（prepare 幂等，直链打开/刷新也能用）
+  app.get('/play/:id', (req, reply) => {
+    const t = getTitle(Number(req.params.id));
+    if (!t) return reply.code(404).type('text/html; charset=utf-8').send('404 未找到该条目');
+    const hash = String(req.query.h ?? '').toLowerCase();
+    if (!isHash(hash)) return reply.code(400).type('text/html; charset=utf-8').send('缺少有效的资源标识');
+    const f = Number(req.query.f);
+    return html(reply, playPage(t, hash, Number.isInteger(f) && f >= 0 ? f : null));
+  });
+
+  // sidecar 同源代理：Range/HEAD 透传、不设总超时（长流），客户端断开即取消上游。
+  // 白名单只放行直出与 HLS 子资源；job 名不允许含点，防 ../ 归一化绕过白名单
+  const STREAM_PATH = /^(?:[0-9a-f]{40}\/(?:-1|\d{1,7})|hlsv2\/[\w-]{1,64}\/(?:master\.m3u8|index\.m3u8|init\.mp4|seg\d{1,6}\.m4s))$/;
+  const PASS_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag'];
+
+  app.get('/stream/*', async (req, reply) => {
+    const path = req.params['*'];
+    if (!STREAM_PATH.test(path)) return reply.code(400).send({ error: 'bad stream path' });
+    const qs = req.raw.url.split('?')[1];
+    const ac = new AbortController();
+    req.raw.once('close', () => ac.abort());
+    let up;
+    try {
+      up = await fetch(`${config.streamUrl}/${path}${qs ? `?${qs}` : ''}`, {
+        method: req.method === 'HEAD' ? 'HEAD' : 'GET',
+        headers: req.headers.range ? { range: req.headers.range } : undefined,
+        signal: ac.signal,
+      });
+    } catch (e) {
+      if (ac.signal.aborted) return; // 客户端主动断开，不算错误
+      req.log.warn({ path, err: e.message }, 'stream proxy failed');
+      return reply.code(502).send({ error: 'stream server unavailable' });
+    }
+    const headers = {};
+    for (const h of PASS_HEADERS) {
+      const v = up.headers.get(h);
+      if (v) headers[h] = v;
+    }
+    // HEAD 必须原样透传（含 content-length）——reply.send() 空 body 会被 Fastify 改成 0，播放器探测会失真
+    if (req.method === 'HEAD') {
+      reply.hijack();
+      reply.raw.writeHead(up.status, headers);
+      reply.raw.end();
+      return;
+    }
+    reply.code(up.status);
+    reply.headers(headers);
+    return up.body ? reply.send(Readable.fromWeb(up.body)) : reply.send();
+  });
+
   app.get('/api/douban/:id', async (req, reply) => {
     const id = Number(req.params.id);
     const row = doubanGet.get(id);
@@ -227,6 +335,16 @@ export default async function routes(app) {
     try {
       const svg = await readFile(new URL('./views/tmdb-logo.svg', import.meta.url));
       return reply.type('image/svg+xml').header('cache-control', CACHE).send(svg);
+    } catch {
+      return reply.code(404).send();
+    }
+  });
+
+  // hls.js（vendored，1.6.7）：播放页转码通道用；与页面同鉴权，不进 OPEN 白名单
+  app.get('/hls.min.js', async (req, reply) => {
+    try {
+      const js = await readFile(new URL('./views/hls.min.js', import.meta.url));
+      return reply.type('text/javascript').header('cache-control', CACHE).send(js);
     } catch {
       return reply.code(404).send();
     }
