@@ -131,7 +131,8 @@ loginctl enable-linger $USER     # 未登录时也持续运行
 │   │   ├── douban250.js     # 豆瓣 Top250 榜单快照、片名解析与榜内缺片补录
 │   │   ├── providers/       # 磁力来源：bitmagnet、Prowlarr，及相关性/季集/字幕解析
 │   │   └── crawler.js       # 控制协议的数据层（读写上面两个 JSON）
-│   ├── sidecar/converter.py # 转码补丁（软解 + 核显硬编，bind mount 进 stream 镜像）
+│   ├── sidecar/converter.py   # 转码补丁（软解 + 核显硬编；HEVC 直拷强制 hvc1 tag；转码流 VOD 预声明）
+│   ├── sidecar/fingerprint.py # 决策补丁（copy 分支带出源编码，供上者条件判断）
 │   └── docker-compose.yml
 └── crawler/                 # DHT 爬虫栈
     ├── docker-compose.yml   # bitmagnet core / crawler / postgres

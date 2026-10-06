@@ -383,7 +383,8 @@ export function detailPage(t, fav, added = false) {
 }
 
 // 播放页：骨架立即渲染；页面 JS 先 prepare（幂等）拿文件表，再向 /api/play/stream 要地址。
-// 直出播放失败自动 force 回退 HLS；iOS 无 MSE 走原生 HLS，其余用 vendored hls.js
+// 直出播放失败自动 force 回退 HLS；有 MSE 用 vendored hls.js，仅无 MSE（iOS）走原生 HLS。
+// copy 流解码失败自动重试一次服务端转码（tcRetry）
 export function playPage(t, hash, f) {
   return layout({ title: `播放 ${t.title}`, body: `
   <div class="play">
@@ -397,38 +398,69 @@ export function playPage(t, hash, f) {
   (() => {
     const V = document.getElementById('v'), BAR = document.getElementById('bar'), FILES = document.getElementById('files');
     const HASH = ${JSON.stringify(hash)}, ID = ${t.id};
-    let F = ${f ?? 'null'}, hls = null, mode = null, fellBack = false;
+    const E = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    let F = ${f ?? 'null'}, hls = null, mode = null, fellBack = false, tcTried = false, lastT = 0;
+    const mmss = (s) => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
 
-    // 设备能否解 HEVC：能则声明给服务端，HEVC 源（4K 主流）走零转码 remux 直拷由设备硬解，本机不烧 CPU
+    // 设备能否解 HEVC：能则声明给服务端，HEVC 源（4K 主流）走零转码 remux 直拷由设备硬解，本机不烧 CPU。
+    // 渲染走 hls.js（有 MSE）时以 isTypeSupported 为准；仅无 MSE（iOS 原生 HLS）才看 canPlayType 'probably'——
+    // 电视浏览器常自称 'probably' 而 MSE 解不了 HEVC，会直接撞 hls.js 的 manifestIncompatibleCodecsError
     const HEVC = (() => {
       try {
         const s = 'video/mp4; codecs="hvc1.2.4.L153.B0"';
-        return !!(V.canPlayType(s) || (window.MediaSource && MediaSource.isTypeSupported(s)));
+        return window.Hls && Hls.isSupported()
+          ? !!(window.MediaSource && MediaSource.isTypeSupported(s))
+          : V.canPlayType(s) === 'probably';
       } catch { return false; }
     })();
 
-    const start = async (force) => {
+    const start = async (force, noHevc) => {
       if (hls) { hls.destroy(); hls = null; }
       mode = null;
       const r = await fetch('/api/play/stream', { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ hash: HASH, f: F, force, hevc: HEVC }) });
+        body: JSON.stringify({ hash: HASH, f: F, force, hevc: HEVC && !noHevc }) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
       if (d.mode === 'direct') { mode = 'direct'; V.src = d.url; }
-      else if (V.canPlayType('application/vnd.apple.mpegurl')) { mode = 'hls'; V.src = d.url; }
+      // 优先 hls.js（错误事件完整可控，失败能走 tcRetry）；仅无 MSE（iOS）才交原生播放器——
+      // 顺序反了会让「自称 maybe 支持 mpegurl 却放不动」的浏览器把失败藏进原生管线
       else if (window.Hls && Hls.isSupported()) {
         mode = 'hls';
-        hls = new Hls();
+        // 拖到未转码区时读取端会等 35s 再 404：超时设在其上、不重试，成功/失败交由服务端裁决
+        hls = new Hls({ fragLoadingTimeOut: 40000, fragLoadingMaxRetry: 0 });
         hls.on(Hls.Events.ERROR, (ev, data) => {
+          // 拖到尚未转码的区域：目标片段 404/超时 → 跳回最近可播位置继续，不算播放失败。
+          // 注意 hls.js 对片段 404 只发非致命事件（然后静默试下一个片段、永远等不到数据），不能只盯 fatal
+          if (data.frag && lastT > 0 && data.frag.start > lastT + 60
+              && (data.fatal || String(data.details).startsWith('fragLoad'))) {
+            BAR.textContent = '该位置还在转码中，已跳回 ' + mmss(lastT) + ' 继续播放';
+            try { V.currentTime = lastT; } catch {}
+            hls.startLoad();
+            return;
+          }
           if (!data.fatal) return;
+          if (tcRetry()) return;
           mode = null;
           BAR.textContent = '播放出错：' + (data.details || data.type);
         });
         hls.loadSource(d.url); hls.attachMedia(V);
-      } else throw new Error('此浏览器不支持 HLS 播放');
+      }
+      else if (V.canPlayType('application/vnd.apple.mpegurl')) { mode = 'hls'; V.src = d.url; }
+      else throw new Error('此浏览器不支持 HLS 播放');
       BAR.textContent = d.mode === 'hls' ? '流式播放中…' : '直连播放中…';
       V.play().catch(() => {});
     };
+
+    // copy 流（声明 HEVC 时的零转码直拷）解码失败的兜底：只重试一次，改为服务端转码（hevc:false）
+    const tcRetry = () => {
+      if (mode !== 'hls' || tcTried || !HEVC) return false;
+      tcTried = true;
+      BAR.textContent = '设备解码失败，切换服务端转码…';
+      start('hls', true).catch((e) => { BAR.textContent = '播放失败：' + e.message; });
+      return true;
+    };
+
+    V.addEventListener('timeupdate', () => { if (!V.seeking) lastT = V.currentTime; });
 
     V.addEventListener('error', () => {
       if (!V.src || !mode) return;
@@ -436,7 +468,8 @@ export function playPage(t, hash, f) {
         fellBack = true;
         BAR.textContent = '直出不兼容，切换转码…';
         start('hls').catch((e) => { BAR.textContent = '播放失败：' + e.message; });
-      } else {
+      } else if (!tcRetry()) {
+        mode = null;   // 冻结统计轮询，失败文案不再被 4s 状态刷新覆盖
         BAR.textContent = '播放失败：资源不可播或浏览器不支持';
       }
     });
@@ -459,12 +492,12 @@ export function playPage(t, hash, f) {
           '<option value="' + x.idx + '"' + (x.idx === F ? ' selected' : '') + '>' +
           E(x.name) + ' （' + (x.length / 1048576).toFixed(0) + 'MB）</option>').join('') + '</select>';
         document.getElementById('fsel').onchange = (ev) => {
-          F = Number(ev.target.value); fellBack = false;
+          F = Number(ev.target.value); fellBack = false; tcTried = false;
           start().catch((e2) => { BAR.textContent = '播放失败：' + e2.message; });
         };
       }
       try { await start(); } catch (e) { fail(e); }
-    })();
+    })().catch(fail);
 
     // 播放中每 4 秒刷新下载状态；标签页关闭/刷新时通知服务端停种（幂等）
     setInterval(async () => {
@@ -476,8 +509,8 @@ export function playPage(t, hash, f) {
         const sp = s.downloadSpeed >= 1048576
           ? (s.downloadSpeed / 1048576).toFixed(1) + ' MB/s'
           : Math.round((s.downloadSpeed || 0) / 1024) + ' KB/s';
-        const pr = s.streamProgress != null ? Math.round(s.streamProgress * 100) + '%' : '—';
-        BAR.textContent = (hls ? '流式' : '直连') + ' · 下载 ' + sp + ' · peers ' + (s.peers ?? 0) + ' · 缓冲 ' + pr;
+        const pr = s.streamProgress != null ? Math.min(100, Math.round(s.streamProgress * 100)) + '%' : '—';
+        BAR.textContent = (mode === 'hls' ? '流式' : '直连') + ' · 下载 ' + sp + ' · peers ' + (s.peers ?? 0) + ' · 缓冲 ' + pr;
       } catch {}
     }, 4000);
 

@@ -90,7 +90,10 @@ export async function decide(hash, idx, force, hevc) {
   // 不带 hevc 时退化为最小公分母 h264（浏览器 <video> 与 iOS 原生 HLS 都稳吃 h264+aac）
   q.append('videoCodecs', 'h264');
   if (hevc) q.append('videoCodecs', 'hevc');
-  return { mode: 'hls', url: `/stream/hlsv2/${hash}-${idx}/master.m3u8?${q}` };
+  // 任务 id 必须带上决策档位：sidecar 对同名存活任务直接复用（ensure_job），若 copy 与转码共用一个
+  // id，前端换参数重试（tcRetry）会被复用回旧流——曾致 manifestIncompatibleCodecsError 重试无效
+  const job = `${hash}-${idx}-${hevc ? 'hevc' : 'h264'}`;
+  return { mode: 'hls', url: `/stream/hlsv2/${job}/master.m3u8?${q}` };
 }
 
 export async function stats(hash, idx) {
@@ -101,6 +104,8 @@ export async function stats(hash, idx) {
 export async function stop(hash, idx) {
   await fetch(`${config.streamUrl}/${hash}/remove`, { signal: AbortSignal.timeout(10_000) }).catch(() => {});
   if (Number.isInteger(idx)) {
-    await fetch(`${config.streamUrl}/hlsv2/${hash}-${idx}/destroy`, { signal: AbortSignal.timeout(10_000) }).catch(() => {});
+    // 两种决策档位后缀（decide 的 -hevc/-h264）都要清；无后缀的是旧格式遗留任务
+    await Promise.all(['-hevc', '-h264', ''].map((s) =>
+      fetch(`${config.streamUrl}/hlsv2/${hash}-${idx}${s}/destroy`, { signal: AbortSignal.timeout(10_000) }).catch(() => {})));
   }
 }

@@ -51,9 +51,12 @@ services:
       - TZ=${TZ:-Asia/Shanghai}
     volumes:
       - stream-data:/root/.stremio-server
-      # patch：vaapi 转码分支改为 CPU 软解 + 硬编（老 Intel 核显的 VAAPI 不支持 HEVC Main10 硬解，
-      # 10bit x265 源在原全硬链上必死；详见文件头注释）
+      # patch：① vaapi 转码分支改 CPU 软解+硬编（老 Intel 核显 VAAPI 解不了 HEVC Main10，
+      # 10bit x265 源在全硬链上必死）② HEVC 直拷强制 hvc1 tag（浏览器 MSE 只认 hvc1，ffmpeg 默认写
+      # hev1）③ 转码任务 VOD 预声明（整集时长固定；ffmpeg 写 *.live.m3u8 工作副本）；
+      # fingerprint 带出源编码供 ② 条件判断。均详见各自文件头注释
       - ./sidecar/converter.py:/srv/app/src/stremiosrv/transcode/converter.py:ro
+      - ./sidecar/fingerprint.py:/srv/app/src/stremiosrv/transcode/fingerprint.py:ro
     ports:
       - "6881:6881/tcp"
       - "6881:6881/udp"

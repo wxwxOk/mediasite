@@ -5,14 +5,20 @@ Uses an EVENT playlist so the player can start after the first segment instead o
 whole transcode (full VOD-on-demand seeking is a later refinement).
 
 PATCH(mediasite): 镜像内 /srv/app/src/stremiosrv/transcode/converter.py 的替换副本（bind mount）。
-唯一改动：vaapi 分支由「全硬管线」改为「CPU 软解 + VAAPI 硬编」。原因：HD530 的 VAAPI 硬解
+改动 ①：vaapi 分支由「全硬管线」改为「CPU 软解 + VAAPI 硬编」。原因：HD530 的 VAAPI 硬解
 不支持 HEVC Main10（profile 2），10bit x265 源在原链上 ffmpeg 初始化即死且无回退；软解 + 10bit→
 nv12 CPU 转换 + hwupload 硬编实测 4.5x 实时（原全软 libx264 仅 1.4x 且 4 核全满）。
+改动 ②：copy 分支对 HEVC 源强制 -tag:v hvc1。MKV 源 remux 进 fMP4 时 ffmpeg 默认写 hev1，
+浏览器 MSE 只认 hvc1 直接播放失败（mp4 源自带 hvc1 所以此前未暴露）。
+改动 ③：转码任务 VOD 预声明——先取整集时长生成全量播放列表（含 ENDLIST）给客户端，
+ffmpeg 实际写 *.live.m3u8 工作副本；关键帧对齐整 4s 保证段边界可预测。解决 EVENT 播放列表
+"总时长随转码增长、进度条不断变化"的问题。
 上游镜像升级后需重新 diff 本文件（改动点均有 PATCH 标记）。
 """
 from __future__ import annotations
 
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -21,11 +27,13 @@ import time
 from pathlib import Path
 
 from stremiosrv import metrics
+from stremiosrv.transcode.probe import probe_media
 
 logger = logging.getLogger("stremiosrv.transcode")
 
 
-def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: str | Path) -> list[str]:
+def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: str | Path,
+                  duration: float | None = None) -> list[str]:
     out_dir = str(out_dir)
     v = decision.get("video", {})
     a = decision.get("audio")
@@ -46,6 +54,9 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
     # Video
     if v.get("action") == "copy":
         argv += ["-c:v", "copy"]
+        # PATCH(mediasite): HEVC 直拷强制 hvc1 tag；非 HEVC 源打该 tag 会被 ffmpeg 判 incompatible 报错，故条件化
+        if v.get("codec") == "hevc":
+            argv += ["-tag:v", "hvc1"]
     else:
         w = v.get("scale_width")
         if profile == "nvenc-linux":
@@ -59,6 +70,9 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
             if w:
                 argv += ["-vf", f"scale={w}:-2:flags=lanczos"]
             argv += ["-c:v", "libx264", "-preset", "veryfast"]
+        # PATCH(mediasite): VOD 预声明要求段边界可预测 → 关键帧对齐整 4s（与 hls_time 一致）
+        if duration:
+            argv += ["-force_key_frames", "expr:gte(t,n_forced*4)"]
 
     # Audio
     if a is not None:
@@ -67,12 +81,18 @@ def build_hls_cmd(media_url: str, decision: dict, profile: str | None, out_dir: 
         else:
             argv += ["-c:a", "aac", "-ac", "2", "-ab", "384000"]
 
+    # PATCH(mediasite): VOD 模式下 ffmpeg 的工作播放列表让位 *.live.m3u8，对客户端的
+    # master/index 由 ensure_job 预生成（整集时长固定、可拖到已转码区）
+    if duration and v.get("action") == "transcode":
+        master_pl, media_pl = "master.live.m3u8", "index.live.m3u8"
+    else:
+        master_pl, media_pl = "master.m3u8", "index.m3u8"
     argv += [
         "-f", "hls", "-hls_time", "4", "-hls_playlist_type", "event",
         "-hls_segment_type", "fmp4", "-hls_flags", "independent_segments",
         "-hls_fmp4_init_filename", "init.mp4",
         "-hls_segment_filename", f"{out_dir}/seg%d.m4s",
-        "-master_pl_name", "master.m3u8", f"{out_dir}/index.m3u8",
+        "-master_pl_name", master_pl, f"{out_dir}/{media_pl}",
     ]
     return argv
 
@@ -139,7 +159,34 @@ class Converter:
             return  # never delete a tree an unsafe id named; the route rejects it separately
         shutil.rmtree(d, ignore_errors=True)
 
+    @staticmethod
+    def _write_vod_playlists(d: Path, duration: float) -> None:
+        """PATCH(mediasite): 预声明整片播放列表——客户端立刻拿到固定总时长与完整进度条；
+        尚未产出的片段由读取路由等待（serve_file 的 _wait_file）。
+
+        master 里不写 CODECS：转码输出的 avc1 profile/level 无法事先准确获知，写错会引发
+        hls.js 的支持性误判（宁缺毋滥）；单档播放也不依赖分辨率/码率标注。
+        """
+        n = max(1, math.ceil(duration / 4.0))
+        lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-TARGETDURATION:4",
+                 "#EXT-X-MEDIA-SEQUENCE:0", "#EXT-X-PLAYLIST-TYPE:VOD",
+                 "#EXT-X-INDEPENDENT-SEGMENTS", '#EXT-X-MAP:URI="init.mp4"']
+        for i in range(n):
+            seg = 4.0 if i < n - 1 else max(0.04, duration - 4.0 * (n - 1))
+            lines += [f"#EXTINF:{seg:.3f},", f"seg{i}.m4s"]
+        lines.append("#EXT-X-ENDLIST")
+        (d / "index.m3u8").write_text("\n".join(lines) + "\n")
+        (d / "master.m3u8").write_text(
+            "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-STREAM-INF:BANDWIDTH=5000000\nindex.m3u8\n")
+
     def ensure_job(self, job_id: str, media_url: str, decision: dict) -> Path:
+        # PATCH(mediasite): 转码任务先取整集时长，供 VOD 预声明；probe 失败退回 EVENT 老行为
+        duration: float | None = None
+        if (decision.get("video") or {}).get("action") == "transcode":
+            try:
+                duration = float(probe_media(media_url).get("format", {}).get("duration") or 0) or None
+            except Exception:
+                duration = None
         with self._lock:
             existing = self._jobs.get(job_id)
             if existing is not None and existing.poll() is None:
@@ -147,12 +194,14 @@ class Converter:
                 return self.job_dir(job_id)
             d = self.job_dir(job_id)
             d.mkdir(parents=True, exist_ok=True)
-            argv = build_hls_cmd(media_url, decision, self.profile, d)
+            argv = build_hls_cmd(media_url, decision, self.profile, d, duration)
             # Not a context manager on purpose: this handle IS ffmpeg's stderr for the lifetime
             # of the child process, so closing it at the end of a with-block would truncate the
             # job's log the moment it starts writing. Released when the Popen is collected.
             log = open(d / "ffmpeg.log", "wb")  # noqa: SIM115
             self._jobs[job_id] = subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=log)
+            if duration:
+                self._write_vod_playlists(d, duration)
             # Counts as activity immediately, or the reaper could take a transcode in the window
             # between starting it and the player's first segment request.
             self._seen[job_id] = time.monotonic()
